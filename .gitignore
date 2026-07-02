@@ -30,3 +30,7 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+
+# 测试生成的图表
+charts/
+*.png
