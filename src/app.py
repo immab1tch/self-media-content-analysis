@@ -2,25 +2,475 @@
 """
 主程序入口模块。
 
-提供 Streamlit Web 界面，整合数据导入、AI 问答与
-可视化展示功能。
+基于 Streamlit 搭建 Web 界面，整合数据导入、AI 问答与可视化展示。
 """
 
+import io
 import logging
+import os
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+import pandas as pd
+import streamlit as st
+from dotenv import load_dotenv
+
+# 将 src 目录加入 sys.path，以便同目录模块可互相导入
+_src_dir = Path(__file__).resolve().parent
+if str(_src_dir) not in sys.path:
+    sys.path.insert(0, str(_src_dir))
+
+from analyzer import run_analysis
+from data_loader import load_data
+from data_processor import preprocess_data
+from visualizer import create_chart
 
 logger = logging.getLogger(__name__)
+load_dotenv()
+
+# 页面配置（必须是首个 Streamlit 命令）
+st.set_page_config(
+    page_title="自媒体账号内容数据分析系统",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+
+def _init_session_state() -> None:
+    """初始化 Streamlit 会话状态。"""
+    if "df_raw" not in st.session_state:
+        st.session_state.df_raw = None  # 原始数据
+    if "df_processed" not in st.session_state:
+        st.session_state.df_processed = None  # 预处理后数据
+    if "data_summary" not in st.session_state:
+        st.session_state.data_summary = None  # 数据摘要
+    if "ai_assistant" not in st.session_state:
+        st.session_state.ai_assistant = None  # AI 助手实例
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []  # 对话历史（每条含 role/content/chart/analysis_type）
+    if "degraded_warning_shown" not in st.session_state:
+        st.session_state.degraded_warning_shown = False
+
+
+def _load_ai_assistant():
+    """
+    懒加载 AI 助手实例（首次使用时导入，避免 Streamlit 启动慢）。
+    """
+    if st.session_state.ai_assistant is not None:
+        return
+
+    from ai_assistant import AIAssistant
+
+    try:
+        st.session_state.ai_assistant = AIAssistant(st.session_state.df_processed)
+    except Exception as exc:
+        logger.error("AI 助手初始化失败：%s", exc)
+        st.error(f"AI 助手初始化失败：{exc}")
+        st.session_state.ai_assistant = None
+
+
+def _handle_file_upload(uploaded_file) -> None:
+    """
+    处理文件上传：加载数据 → 预处理 → 生成摘要。
+
+    参数:
+        uploaded_file: Streamlit 上传的文件对象。
+    """
+    if uploaded_file is None:
+        return
+
+    file_name = uploaded_file.name
+    file_bytes = uploaded_file.getvalue()
+
+    # 写入临时文件后调用 load_data（load_data 只接受文件路径）
+    suffix = Path(file_name).suffix
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
+
+    try:
+        df_raw = load_data(tmp_path)
+        df_processed = preprocess_data(df_raw)
+    except Exception as exc:
+        logger.error("数据加载失败：%s", exc)
+        st.error(f"数据加载失败：{exc}")
+        return
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    st.session_state.df_raw = df_raw
+    st.session_state.df_processed = df_processed
+
+    # 生成数据摘要（供 AI 使用）
+    from data_processor import generate_data_summary
+    st.session_state.data_summary = generate_data_summary(df_processed)
+
+    # 重置 AI 助手与对话历史
+    st.session_state.ai_assistant = None
+    st.session_state.chat_history = []
+
+    st.success(f"数据加载成功！共 {len(df_processed)} 条记录。")
+
+
+def _render_sidebar() -> None:
+    """渲染侧边栏：文件上传 + 数据预览。"""
+    with st.sidebar:
+        st.header("📁 数据管理")
+        st.markdown("---")
+
+        # 文件上传
+        uploaded_file = st.file_uploader(
+            "上传数据文件",
+            type=["csv", "xlsx", "xls"],
+            help="支持 CSV、Excel（.xlsx/.xls）格式",
+        )
+        if uploaded_file is not None:
+            _handle_file_upload(uploaded_file)
+
+        st.markdown("---")
+
+        # 数据预览
+        if st.session_state.df_processed is not None:
+            st.subheader("📋 数据预览")
+            df = st.session_state.df_processed
+            st.write(f"共 **{len(df)}** 条记录，**{len(df.columns)}** 个字段")
+
+            preview_count = min(10, len(df))
+            st.dataframe(
+                df.head(preview_count),
+                use_container_width=True,
+                height=300,
+            )
+
+            with st.expander("📊 数据摘要"):
+                if st.session_state.data_summary:
+                    st.text(st.session_state.data_summary)
+
+            st.markdown("---")
+            if st.button("🗑️ 清空聊天历史", use_container_width=True):
+                st.session_state.chat_history = []
+                if st.session_state.ai_assistant is not None:
+                    st.session_state.ai_assistant.clear_history()
+                st.success("聊天历史已清空。")
+                st.rerun()
+        else:
+            st.info("请先上传数据文件（CSV / Excel）")
+
+            # 提供示例数据快速体验
+            st.markdown("---")
+            st.caption("💡 没有数据？试试示例数据")
+            sample_path = _src_dir.parent / "data" / "sample" / "sample_content.csv"
+            if sample_path.exists():
+                if st.button("📎 加载示例数据", use_container_width=True):
+                    try:
+                        df_raw = load_data(str(sample_path))
+                        df_processed = preprocess_data(df_raw)
+                        st.session_state.df_raw = df_raw
+                        st.session_state.df_processed = df_processed
+                        from data_processor import generate_data_summary
+                        st.session_state.data_summary = generate_data_summary(df_processed)
+                        st.session_state.ai_assistant = None
+                        st.session_state.chat_history = []
+                        st.success("示例数据加载成功！")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"示例数据加载失败：{exc}")
+
+
+def _render_degraded_warning() -> None:
+    """渲染降级模式提示（API 未配置时）。"""
+    api_key = os.environ.get("LLM_API_KEY", "").strip()
+    if api_key and st.session_state.ai_assistant is not None and not st.session_state.ai_assistant.is_degraded:
+        return
+
+    if not st.session_state.degraded_warning_shown:
+        st.warning(
+            "⚠️ 未检测到大模型 API 密钥，当前为**本地统计模式**。"
+            "分析结果基于本地统计算法生成，不具备自然语言理解能力。"
+            "如需 AI 智能分析，请在 `.env` 文件中配置 `LLM_API_KEY`。",
+            icon="🤖",
+        )
+        st.session_state.degraded_warning_shown = True
+
+
+def _render_chat_input() -> Optional[str]:
+    """
+    渲染 AI 问答输入框。
+
+    返回:
+        用户输入的问题字符串，或 None。
+    """
+    st.subheader("💬 AI 数据分析助手")
+
+    # 判断是否可提问
+    disabled = st.session_state.df_processed is None
+    if disabled:
+        st.info("请先在侧边栏上传数据文件，然后开始提问。")
+        return None
+
+    with st.form("chat_form", clear_on_submit=True):
+        col1, col2 = st.columns([8, 1])
+        with col1:
+            question = st.text_input(
+                "请输入你的问题",
+                placeholder="例如：哪种内容类型的播放量最高？",
+                label_visibility="collapsed",
+                disabled=disabled,
+            )
+        with col2:
+            submitted = st.form_submit_button("🚀 发送", use_container_width=True)
+
+    if submitted and question and question.strip():
+        return question.strip()
+    return None
+
+
+def _render_conclusion(result: Dict[str, Any]) -> None:
+    """
+    渲染 AI 分析结论文字。
+
+    参数:
+        result: AI 助手返回的结果字典。
+    """
+    conclusion = result.get("conclusion", "")
+    analysis_type = result.get("analysis_type")
+
+    with st.container():
+        # AI 生成标签
+        tag = "🤖 AI 分析"
+        if analysis_type:
+            type_names = {
+                "describe": "描述性统计",
+                "correlation": "相关性分析",
+                "trend": "趋势分析",
+                "content_type": "内容类型分析",
+                "top": "Top N 分析",
+                "distribution": "分布分析",
+            }
+            type_name = type_names.get(analysis_type, analysis_type)
+            tag += f" · {type_name}"
+
+        st.info(f"**{tag}**\n\n{conclusion}")
+
+
+def _render_chart(result: Dict[str, Any]) -> None:
+    """
+    渲染可视化图表。
+
+    参数:
+        result: AI 助手返回的结果字典。
+    """
+    chart = result.get("chart")
+    if chart is None:
+        return
+
+    # 判断是 matplotlib 还是 plotly
+    if hasattr(chart, "update_layout") and hasattr(chart, "write_image"):
+        # plotly Figure
+        st.plotly_chart(chart, use_container_width=True)
+    elif hasattr(chart, "savefig"):
+        # matplotlib Figure
+        st.pyplot(chart, use_container_width=True)
+    else:
+        logger.warning("未知图表类型：%s", type(chart).__name__)
+
+
+def _render_history() -> None:
+    """渲染底部对话历史记录。"""
+    if not st.session_state.chat_history:
+        return
+
+    st.markdown("---")
+    st.subheader("📜 对话历史")
+
+    for idx, msg in enumerate(st.session_state.chat_history):
+        if msg["role"] == "user":
+            with st.chat_message("user"):
+                st.markdown(msg["content"])
+        else:
+            with st.chat_message("assistant"):
+                _render_conclusion(msg)
+                if msg.get("chart") is not None:
+                    _render_chart(msg)
+
+
+def _process_question(question: str) -> None:
+    """
+    处理用户问题：调用 AI 助手 → 存储历史 → 展示结果。
+
+    参数:
+        question: 用户问题文本。
+    """
+    # 先添加用户消息到历史
+    st.session_state.chat_history.append({
+        "role": "user",
+        "content": question,
+    })
+
+    # 判断是首问还是追问
+    has_history = len(
+        [m for m in st.session_state.chat_history if m["role"] == "assistant"]
+    ) > 0
+
+    # 懒加载 AI 助手
+    _load_ai_assistant()
+
+    result: Dict[str, Any] = {
+        "conclusion": "",
+        "chart": None,
+        "analysis_type": None,
+    }
+
+    if st.session_state.ai_assistant is not None and not st.session_state.ai_assistant.is_degraded:
+        # AI 模式
+        try:
+            if has_history:
+                result = st.session_state.ai_assistant.ask_followup(question)
+            else:
+                result = st.session_state.ai_assistant.ask(question)
+        except Exception as exc:
+            logger.error("AI 问答失败：%s", exc)
+            result["conclusion"] = f"AI 服务调用失败：{exc}"
+            result["analysis_type"] = None
+    else:
+        # 降级模式：用关键词匹配走本地统计
+        result = _local_statistics_answer(question)
+
+    # 存储助手回复
+    assistant_msg = {
+        "role": "assistant",
+        "content": result.get("conclusion", ""),
+        "chart": result.get("chart"),
+        "analysis_type": result.get("analysis_type"),
+    }
+    st.session_state.chat_history.append(assistant_msg)
+
+
+def _local_statistics_answer(question: str) -> Dict[str, Any]:
+    """
+    降级模式：基于关键词匹配的本地统计分析。
+
+    参数:
+        question: 用户问题。
+
+    返回:
+        同 AIAssistant.ask 的返回结构。
+    """
+    df = st.session_state.df_processed
+    if df is None:
+        return {"conclusion": "暂无数据。", "chart": None, "analysis_type": None}
+
+    # 关键词 → analysis_type 映射
+    keyword_map = [
+        ("趋势", "trend"),
+        ("变化", "trend"),
+        ("走势", "trend"),
+        ("相关", "correlation"),
+        ("关联", "correlation"),
+        ("类型", "content_type"),
+        ("占比", "content_type"),
+        ("分布", "distribution"),
+        ("异常", "distribution"),
+        ("top", "top"),
+        ("排行", "top"),
+        ("排名", "top"),
+        ("最高", "top"),
+        ("最大", "top"),
+    ]
+    q = question.lower()
+    analysis_type = "describe"
+    for keyword, atype in keyword_map:
+        if keyword in q:
+            analysis_type = atype
+            break
+
+    chart = None
+    stats_text = ""
+    try:
+        stats_text = run_analysis(df, analysis_type, params={})
+    except Exception as exc:
+        logger.error("本地统计分析失败：%s", exc)
+        if analysis_type != "describe":
+            analysis_type = "describe"
+            try:
+                stats_text = run_analysis(df, analysis_type, params={})
+            except Exception as exc2:
+                logger.error("本地 describe 也失败：%s", exc2)
+                stats_text = ""
+
+    try:
+        chart_available = {
+            "describe": False,
+            "correlation": True,
+            "trend": True,
+            "content_type": True,
+            "top": True,
+            "distribution": True,
+        }
+        if chart_available.get(analysis_type, False):
+            chart = create_chart(analysis_type, df, params={})
+    except Exception as exc:
+        logger.error("本地图表生成失败：%s", exc)
+
+    conclusion = (
+        "【本地统计分析结果】\n\n"
+        f"{stats_text}"
+    ) if stats_text else "本地统计分析失败。"
+
+    return {
+        "conclusion": conclusion,
+        "chart": chart,
+        "analysis_type": analysis_type if stats_text else None,
+    }
+
+
+def _render_main_area() -> None:
+    """渲染主区域：问答输入 + 最新结果 + 历史。"""
+    st.title("📊 自媒体账号内容数据分析系统")
+    st.caption("AI 驱动的自然语言数据分析助手 · 导入数据，用大白话提问，即刻获得结论与图表")
+    st.markdown("---")
+
+    _render_degraded_warning()
+
+    # 问答输入
+    question = _render_chat_input()
+    if question:
+        _process_question(question)
+
+    # 展示对话历史（最新的在最下方，倒序渲染但历史从上到下）
+    if st.session_state.chat_history:
+        st.markdown("---")
+        for msg in st.session_state.chat_history:
+            if msg["role"] == "user":
+                with st.chat_message("user"):
+                    st.markdown(msg["content"])
+            else:
+                with st.chat_message("assistant"):
+                    _render_conclusion(msg)
+                    _render_chart(msg)
+    else:
+        if st.session_state.df_processed is not None:
+            st.info(
+                "👋 数据已加载！试着问我一些问题，例如：\n"
+                "- 播放量趋势如何？\n"
+                "- 哪种内容类型表现最好？\n"
+                "- 播放量和点赞数的相关性怎么样？\n"
+                "- 播放量最高的 5 条内容是哪些？"
+            )
 
 
 def main() -> None:
-    """
-    启动 Streamlit 应用主入口。
-
-    返回:
-        无返回值。
-    """
-    raise NotImplementedError
+    """Streamlit 应用主入口。"""
+    _init_session_state()
+    _render_sidebar()
+    _render_main_area()
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     main()
