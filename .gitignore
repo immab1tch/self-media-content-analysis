@@ -1,0 +1,32 @@
+# 环境变量与密钥
+.env
+
+# 原始数据（不提交到版本库）
+data/raw/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# IDE 与系统文件
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# 测试与构建产物
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/

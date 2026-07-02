@@ -1,0 +1,77 @@
+# ============================================================================
+# 自媒体账号内容数据分析系统 - Cursor 项目规则文件
+# 将此文件放在项目根目录，命名为 .cursorrules，Cursor 会自动加载
+# ============================================================================
+
+## 项目概述
+自媒体账号内容数据分析系统，核心差异化创新点为「AI 驱动的自然语言数据分析助手」。
+用户导入自媒体内容数据后，可通过自然语言提问获得数据分析结论和可视化图表。
+
+## 技术栈
+- 语言 Python 3.12
+- 数据处理 pandas (2.1.4), openpyxl (3.1.2), xlrd (2.0.1)
+- 可视化 matplotlib (3.8.2), plotly (5.9.0)
+- AI 接口 requests (调用 Q Cloud  Workbody  DeepSeek 大模型 API)
+- 配置管理 python-dotenv (通过 .env 文件管理 API 密钥，禁止硬编码)
+- Web 界面（可选） Streamlit
+- 操作系统 Windows 11
+
+## 目录结构
+```
+project
+├── .cursorrules              # 本文件 - Cursor 项目规则
+├── .env                      # API 密钥配置（不提交到 Git）
+├── .env.example              # 密钥配置模板（可提交）
+├── .gitignore
+├── requirements.txt          # 依赖清单
+├── data                     # 数据文件目录
+│   ├── raw                  # 原始导入数据
+│   └── sample               # 示例数据
+├── src                      # 源代码
+│   ├── data_loader.py        # 数据导入与解析
+│   ├── data_processor.py     # 数据预处理 + 上下文摘要生成
+│   ├── analyzer.py           # 统计分析函数（封装为可调用函数）
+│   ├── visualizer.py         # 可视化图表生成
+│   ├── ai_assistant.py       # AI 自然语言分析助手核心模块
+│   ├── prompt_engine.py      # Prompt 模板引擎
+│   ├── api_client.py         # 大模型 API 调用层
+│   ├── context_manager.py    # 对话上下文管理
+│   └── app.py                # 主程序入口  Streamlit 界面
+├── tests                    # 测试
+│   ├── test_data_loader.py
+│   ├── test_ai_assistant.py
+│   └── test_analyzer.py
+└── docs                     # 项目文档
+    ├── 立项报告.docx
+    └── 周报
+```
+
+## 编码规范
+1. 所有 Python 文件使用 UTF-8 编码，开头注明文件功能注释
+2. 函数必须有 docstring，说明：功能、参数、返回值
+3. 变量命名使用 snake_case，类名使用 PascalCase
+4. 所有用户可见的文案使用中文
+5. 图表标题、轴标签使用中文，需设置 matplotlib 中文字体：
+   plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei']
+   plt.rcParams['axes.unicode_minus'] = False
+6. 禁止硬编码 API 密钥，统一通过 os.environ.get() 读取
+7. 每个模块独立可测试，避免循环依赖
+
+## AI 协作规则
+1. 每次只处理一个模块或一个功能点，不要一次性生成所有代码
+2. 生成代码后必须附带运行验证方式（如测试命令或示例调用）
+3. 涉及大模型 API 调用时，必须处理超时、鉴权失败、返回格式异常三种情况
+4. Prompt 模板中禁止向大模型发送全量原始数据，只发送数据摘要
+5. AI 分析结论必须标注AI 生成标签，并附带底层统计依据
+6. 所有 print 调试信息使用 logging 替代，便于关闭
+
+## P0P1P2 优先级
+- P0（必须完成） 数据导入、数据预处理、摘要生成、统计函数封装、单轮自然语言问答
+- P1（尽力完成） 多轮追问、对话上下文管理、图表联动渲染、Streamlit 界面
+- P2（时间充裕时） 多平台数据适配、内容策略建议、数据异常检测
+
+## 禁止事项
+- 禁止使用 MySQLSQLite 等数据库，本项目使用文件存储（CSVExcel）
+- 禁止引入 DjangoFlask 等重型框架，Web 界面仅用 Streamlit
+- 禁止自行训练模型，AI 能力全部通过 API 调用实现
+- 禁止在一个会话中完成所有模块开发，每个模块独立会话
