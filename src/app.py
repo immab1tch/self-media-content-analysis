@@ -17,6 +17,8 @@ import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
+load_dotenv()
+
 # 将 src 目录加入 sys.path，以便同目录模块可互相导入
 _src_dir = Path(__file__).resolve().parent
 if str(_src_dir) not in sys.path:
@@ -25,10 +27,12 @@ if str(_src_dir) not in sys.path:
 from analyzer import run_analysis
 from data_loader import load_data
 from data_processor import preprocess_data
+from data_fetcher import fetch_data, get_platform_info, SUPPORTED_PLATFORMS
 from visualizer import create_chart
 
 logger = logging.getLogger(__name__)
-load_dotenv()
+from pathlib import Path
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 # 页面配置（必须是首个 Streamlit 命令）
 st.set_page_config(
@@ -119,23 +123,71 @@ def _handle_file_upload(uploaded_file) -> None:
 
 
 def _render_sidebar() -> None:
-    """渲染侧边栏：文件上传 + 数据预览。"""
+    """渲染侧边栏：文件上传 + 自动获取 + 数据预览。"""
     with st.sidebar:
         st.header("📁 数据管理")
         st.markdown("---")
 
-        # 文件上传
-        uploaded_file = st.file_uploader(
-            "上传数据文件",
-            type=["csv", "xlsx", "xls"],
-            help="支持 CSV、Excel（.xlsx/.xls）格式",
-        )
-        if uploaded_file is not None:
-            _handle_file_upload(uploaded_file)
+        tab1, tab2 = st.tabs(["📤 上传文件", "🔗 自动获取"])
+
+        with tab1:
+            uploaded_file = st.file_uploader(
+                "上传数据文件",
+                type=["csv", "xlsx", "xls"],
+                help="支持 CSV、Excel（.xlsx/.xls）格式",
+            )
+            if uploaded_file is not None:
+                _handle_file_upload(uploaded_file)
+
+        with tab2:
+            platform = st.selectbox(
+                "选择平台",
+                sorted(SUPPORTED_PLATFORMS),
+                index=0,
+            )
+
+            info = get_platform_info(platform)
+            st.caption(f"示例UID: {info.get('account_id_example', '')}")
+            st.caption(info.get("note", ""))
+
+            account_id = st.text_input(
+                "输入账号ID",
+                placeholder=info.get("account_id_format", "请输入账号ID"),
+            )
+
+            max_videos = st.slider(
+                "获取视频数量",
+                min_value=5,
+                max_value=50,
+                value=20,
+                step=5,
+            )
+
+            if st.button("🚀 获取数据", use_container_width=True):
+                if not account_id or not account_id.strip():
+                    st.warning("请输入账号ID")
+                else:
+                    with st.spinner("正在获取数据..."):
+                        try:
+                            df_raw = fetch_data(platform, account_id.strip(), max_videos)
+                            df_processed = preprocess_data(df_raw)
+
+                            st.session_state.df_raw = df_raw
+                            st.session_state.df_processed = df_processed
+
+                            from data_processor import generate_data_summary
+                            st.session_state.data_summary = generate_data_summary(df_processed)
+
+                            st.session_state.ai_assistant = None
+                            st.session_state.chat_history = []
+
+                            st.success(f"成功获取 {len(df_processed)} 条视频数据！")
+                            st.rerun()
+                        except ValueError as exc:
+                            st.error(f"获取数据失败：{exc}")
 
         st.markdown("---")
 
-        # 数据预览
         if st.session_state.df_processed is not None:
             st.subheader("📋 数据预览")
             df = st.session_state.df_processed
@@ -160,13 +212,12 @@ def _render_sidebar() -> None:
                 st.success("聊天历史已清空。")
                 st.rerun()
         else:
-            st.info("请先上传数据文件（CSV / Excel）")
+            st.info("请先上传数据文件或自动获取数据")
 
-            # 提供示例数据快速体验
-            st.markdown("---")
-            st.caption("💡 没有数据？试试示例数据")
             sample_path = _src_dir.parent / "data" / "sample" / "sample_content.csv"
             if sample_path.exists():
+                st.markdown("---")
+                st.caption("💡 没有数据？试试示例数据")
                 if st.button("📎 加载示例数据", use_container_width=True):
                     try:
                         df_raw = load_data(str(sample_path))
@@ -186,7 +237,7 @@ def _render_sidebar() -> None:
 def _render_degraded_warning() -> None:
     """渲染降级模式提示（API 未配置时）。"""
     api_key = os.environ.get("LLM_API_KEY", "").strip()
-    if api_key and st.session_state.ai_assistant is not None and not st.session_state.ai_assistant.is_degraded:
+    if api_key:
         return
 
     if not st.session_state.degraded_warning_shown:
@@ -252,6 +303,7 @@ def _render_conclusion(result: Dict[str, Any]) -> None:
                 "content_type": "内容类型分析",
                 "top": "Top N 分析",
                 "distribution": "分布分析",
+                "content_recommend": "内容推荐分析",
             }
             type_name = type_names.get(analysis_type, analysis_type)
             tag += f" · {type_name}"
@@ -382,6 +434,9 @@ def _local_statistics_answer(question: str) -> Dict[str, Any]:
         ("排名", "top"),
         ("最高", "top"),
         ("最大", "top"),
+        ("推荐", "content_recommend"),
+        ("选题", "content_recommend"),
+        ("建议", "content_recommend"),
     ]
     q = question.lower()
     analysis_type = "describe"
@@ -412,6 +467,7 @@ def _local_statistics_answer(question: str) -> Dict[str, Any]:
             "content_type": True,
             "top": True,
             "distribution": True,
+            "content_recommend": False,
         }
         if chart_available.get(analysis_type, False):
             chart = create_chart(analysis_type, df, params={})

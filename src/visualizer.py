@@ -141,6 +141,13 @@ def plot_trend(
     ax.set_ylabel(metric, fontsize=11)
     ax.tick_params(axis="both", labelsize=9)
     ax.grid(True, alpha=0.3, linestyle="--")
+
+    for x, y in zip(grouped.index, grouped.values):
+        ax.text(
+            x, y + max(grouped.values) * 0.01,
+            f"{y:.0f}", ha="center", va="bottom", fontsize=8,
+        )
+
     fig.autofmt_xdate()
     fig.tight_layout()
     return fig
@@ -467,6 +474,7 @@ def create_chart(
             metric=params.get("metric", "播放量"),
             n=int(params.get("n", 5)),
         ),
+        "content_recommend": lambda: None,
     }
 
     if chart_type not in dispatch:

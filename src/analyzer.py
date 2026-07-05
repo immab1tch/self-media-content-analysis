@@ -411,6 +411,83 @@ def distribution_analysis(
     return "\n".join(lines)
 
 
+def recommend_content(df: pd.DataFrame) -> str:
+    """
+    内容推荐分析：基于历史数据模式，生成下一批视频内容的选题建议。
+
+    分析维度：
+    1. 高表现内容类型（播放量/点赞率最高的类型）
+    2. 热门标题关键词
+    3. 发布时间规律
+    4. 互动表现好的内容特征
+
+    参数:
+        df: 数据 DataFrame。
+
+    返回:
+        内容推荐分析结果文本，包含推荐理由和选题建议。
+    """
+    lines = ["[内容推荐分析] 基于历史数据的选题建议："]
+
+    if _CONTENT_TYPE_COL in df.columns:
+        type_group = df.groupby(_CONTENT_TYPE_COL).agg(
+            视频数=(_CONTENT_TYPE_COL, "count"),
+            平均播放量=("播放量", "mean") if "播放量" in df.columns else None,
+            平均点赞率=("点赞数", lambda x: (x / df.loc[x.index, "播放量"]).mean() * 100) if ("点赞数" in df.columns and "播放量" in df.columns) else None,
+        ).dropna()
+
+        if "平均播放量" in type_group.columns:
+            top_type_play = type_group["平均播放量"].idxmax()
+            top_play_value = float(type_group.loc[top_type_play, "平均播放量"])
+            lines.append(f"1. 表现最佳类型：{top_type_play}（平均播放量 {top_play_value:.0f}）")
+
+        if "平均点赞率" in type_group.columns:
+            top_type_like = type_group["平均点赞率"].idxmax()
+            top_like_value = float(type_group.loc[top_type_like, "平均点赞率"])
+            lines.append(f"2. 互动最佳类型：{top_type_like}（平均点赞率 {top_like_value:.2f}%）")
+
+    if "播放量" in df.columns and _TITLE_COL in df.columns:
+        top_contents = df.nlargest(5, "播放量")
+        keywords = []
+        for title in top_contents[_TITLE_COL]:
+            title = str(title)
+            for kw in ["测评", "教程", "分享", "体验", "干货", "技巧", "攻略", "推荐"]:
+                if kw in title and kw not in keywords:
+                    keywords.append(kw)
+        if keywords:
+            lines.append(f"3. 热门标题关键词：{', '.join(keywords)}")
+
+    if "发布日期" in df.columns:
+        try:
+            df_copy = df.copy()
+            df_copy["发布日期"] = pd.to_datetime(df_copy["发布日期"], errors="coerce")
+            df_copy = df_copy.dropna(subset=["发布日期"])
+            if not df_copy.empty:
+                df_copy["星期"] = df_copy["发布日期"].dt.dayofweek
+                weekday_map = {0: "周一", 1: "周二", 2: "周三", 3: "周四", 4: "周五", 5: "周六", 6: "周日"}
+                weekday_counts = df_copy["星期"].value_counts().sort_index()
+                best_weekday = weekday_counts.idxmax()
+                best_count = int(weekday_counts[best_weekday])
+                lines.append(f"4. 发布时间建议：{weekday_map.get(best_weekday, best_weekday)}（发布 {best_count} 条，频率最高）")
+        except Exception:
+            pass
+
+    if "播放量" in df.columns:
+        high_performance = df[df["播放量"] > df["播放量"].quantile(0.75)]
+        if len(high_performance) >= 3:
+            avg_play = float(high_performance["播放量"].mean())
+            avg_like = float(high_performance["点赞数"].mean()) if "点赞数" in df.columns else 0
+            like_rate = (avg_like / avg_play * 100) if avg_play > 0 else 0
+            lines.append(f"5. 高表现内容基准：播放量 > {int(df['播放量'].quantile(0.75))}，点赞率 {like_rate:.2f}%")
+
+    lines.append("\n推荐选题方向：")
+    lines.append("- 延续高表现类型的内容，结合热门关键词")
+    lines.append("- 尝试在高频率发布日发布新内容")
+    lines.append("- 关注互动率高的内容特征进行选题")
+
+    return "\n".join(lines)
+
+
 def run_analysis(
     df: pd.DataFrame,
     analysis_type: str,
@@ -451,6 +528,7 @@ def run_analysis(
             df,
             metric=p.get("metric", "播放量"),
         ),
+        "content_recommend": lambda p: recommend_content(df),
     }
 
     if analysis_type not in dispatch:

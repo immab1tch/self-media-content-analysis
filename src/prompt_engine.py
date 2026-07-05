@@ -51,6 +51,11 @@ ANALYSIS_CAPABILITIES: List[Dict[str, str]] = [
         "function": "distribution_analysis(df, metric)",
         "description": "分布分析：输出指定指标的箱形图统计（四分位数、IQR 异常值）",
     },
+    {
+        "analysis_type": "content_recommend",
+        "function": "recommend_content(df)",
+        "description": "内容推荐分析：基于历史数据模式，生成下一批视频内容的选题建议",
+    },
 ]
 
 # 合法的 analysis_type 集合（用于响应校验）
