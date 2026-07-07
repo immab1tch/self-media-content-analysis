@@ -210,7 +210,20 @@ class AIAssistant:
         stats_text = ""
 
         if analysis_type == "recommend":
-            logger.info("recommend 类型：跳过本地分析，直接返回 AI 结论。")
+            # 推荐类型：优先使用 LLM 结论，若为空则补充本地分析
+            logger.info("recommend 类型：使用 AI 推荐结论，必要时补充本地分析。")
+            if not conclusion or len(conclusion.strip()) < 30:
+                logger.warning("LLM 推荐结论过短或为空，补充本地推荐分析。")
+                try:
+                    local_recommend = run_analysis(self._df, "recommend", params={})
+                    conclusion = local_recommend if local_recommend else (
+                        "基于数据分析，建议延续高表现内容分类和视频格式的选题方向。"
+                        "具体请查看下方统计依据。"
+                    )
+                except Exception as rec_exc:
+                    logger.error("本地推荐分析失败：%s", rec_exc)
+                    if not conclusion:
+                        conclusion = "（AI 推荐分析完成，但未能生成详细文字结论）"
         else:
             try:
                 stats_text = run_analysis(self._df, analysis_type, params={})
@@ -260,17 +273,27 @@ class AIAssistant:
         stats_text = ""
 
         if analysis_type == "recommend":
-            logger.info("recommend 类型降级：返回数据参考分析。")
+            logger.info("recommend 类型降级：返回基于数据的本地推荐分析。")
             try:
-                type_analysis = run_analysis(self._df, "content_type", params={})
-                top_analysis = run_analysis(self._df, "top", params={"n": 3})
-                stats_text = (
-                    "当前为本地统计模式，无法生成 AI 个性化推荐。以下是基于历史数据的参考分析：\n\n"
-                    f"{type_analysis}\n\n{top_analysis}"
-                )
+                stats_text = run_analysis(self._df, "recommend", params={})
+                if not stats_text:
+                    # 兜底：用 content_type + top 组合
+                    type_analysis = run_analysis(self._df, "content_type", params={})
+                    top_analysis = run_analysis(self._df, "top", params={"n": 3})
+                    stats_text = (
+                        "【本地统计模式 · 内容推荐分析】\n\n"
+                        f"{type_analysis}\n\n{top_analysis}\n\n"
+                        "建议方向：延续高表现内容分类的选题，结合热门标题关键词进行创作。"
+                    )
             except Exception as exc:
                 logger.error("recommend 降级统计失败：%s", exc)
-                stats_text = "当前为本地统计模式，无法生成 AI 个性化推荐。"
+                stats_text = (
+                    "【本地统计模式 · 内容推荐分析】\n\n"
+                    "当前无法连接 AI 服务，但基于已有数据给出参考建议：\n"
+                    "1. 查看上方「视频类型占比」和「Top N 排行」图表\n"
+                    "2. 延续播放量较高的内容分类进行选题\n"
+                    "3. 关注互动率（点赞/播放）高的内容特征"
+                )
         else:
             try:
                 stats_text = run_analysis(self._df, analysis_type, params={})

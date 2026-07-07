@@ -26,12 +26,20 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_PLATFORMS = {"bilibili", "b站"}
+# 支持的平台（显示名 → 内部标识）
+SUPPORTED_PLATFORMS = {"B站 (哔哩哔哩)": "bilibili"}
+
+# 反向映射：内部标识 → 显示名
+_PLATFORM_DISPLAY_NAMES = {v: k for k, v in SUPPORTED_PLATFORMS.items()}
 
 
 def _generate_simulation_data(uid: str, max_videos: int = 50) -> pd.DataFrame:
     """
     生成模拟视频数据（用于演示和测试）。
+
+    数据模型说明：
+    - 视频类型：视频的格式形态（长视频 / 短视频 / 直播回放）
+    - 内容分类：视频的主题领域（美食 / 旅游 / 科技测评 / vlog 等）
 
     参数:
         uid: 用户ID（用于种子生成）。
@@ -42,10 +50,14 @@ def _generate_simulation_data(uid: str, max_videos: int = 50) -> pd.DataFrame:
     """
     random.seed(int(uid) if uid.isdigit() else hash(uid))
 
-    content_types = ["短视频", "长视频", "直播回放"]
-    topics = [
+    video_types = ["短视频", "长视频", "直播回放"]
+    content_categories = [
         "vlog日常", "美食探店", "科技测评", "游戏攻略", "知识科普",
         "生活技巧", "电影解说", "音乐分享", "健身打卡", "旅行记录",
+    ]
+    topic_templates = [
+        "干货分享", "体验", "教程", "测评", "分享", "攻略",
+        "推荐", "挑战", "复盘", "盘点",
     ]
 
     all_videos = []
@@ -53,8 +65,9 @@ def _generate_simulation_data(uid: str, max_videos: int = 50) -> pd.DataFrame:
 
     for i in range(max_videos):
         days_ago = random.randint(1, 90)
-        video_type = random.choices(content_types, weights=[0.4, 0.5, 0.1])[0]
-        topic = random.choice(topics)
+        video_type = random.choices(video_types, weights=[0.4, 0.5, 0.1])[0]
+        category = random.choice(content_categories)
+        template = random.choice(topic_templates)
 
         base_views = random.randint(500, 50000)
         if video_type == "短视频":
@@ -68,14 +81,14 @@ def _generate_simulation_data(uid: str, max_videos: int = 50) -> pd.DataFrame:
 
         video_info = {
             "发布日期": base_date + pd.Timedelta(days=days_ago),
-            "内容标题": f"{topic} | {random.choice(['干货分享', '体验', '教程', '测评', '分享'])}第{i + 1}期",
-            "内容类型": video_type,
+            "内容标题": f"{category} | {template}第{i + 1}期",
+            "视频类型": video_type,
+            "内容分类": category,
             "播放量": views,
             "点赞数": likes,
             "评论数": comments,
             "转发数": shares,
             "收藏数": favorites,
-            "粉丝增量": random.randint(0, 500),
         }
         all_videos.append(video_info)
 
@@ -120,24 +133,26 @@ def fetch_data(platform: str, account_id: str, max_videos: int = 50) -> pd.DataF
     统一数据获取入口。
 
     参数:
-        platform: 平台名称，支持 "bilibili" 或 "b站"。
+        platform: 平台显示名，如 "B站 (哔哩哔哩)"。
         account_id: 账号ID（B站为UID数字）。
         max_videos: 最大获取视频数，默认50。
 
     返回:
         标准化的视频数据DataFrame，字段与本地CSV一致：
-        发布日期, 内容标题, 内容类型, 播放量, 点赞数, 评论数, 转发数, 收藏数, 粉丝增量
+        发布日期, 内容标题, 视频类型, 内容分类, 播放量, 点赞数, 评论数, 转发数, 收藏数
 
     异常:
         ValueError: 平台不支持或数据获取失败时抛出。
     """
-    platform_lower = platform.strip().lower()
+    platform_key = platform.strip()
 
-    if platform_lower not in SUPPORTED_PLATFORMS:
-        supported = ", ".join(sorted(SUPPORTED_PLATFORMS))
+    if platform_key not in SUPPORTED_PLATFORMS:
+        supported = ", ".join(sorted(SUPPORTED_PLATFORMS.keys()))
         raise ValueError(f"暂不支持平台 '{platform}'，当前支持：{supported}")
 
-    if platform_lower in {"bilibili", "b站"}:
+    internal_id = SUPPORTED_PLATFORMS[platform_key]
+
+    if internal_id == "bilibili":
         return _fetch_bilibili_videos(account_id, max_videos)
 
     raise ValueError(f"未知平台 '{platform}'")
@@ -147,16 +162,22 @@ def get_platform_info(platform: str) -> dict:
     """
     获取平台信息说明。
     """
-    platform_lower = platform.strip().lower()
+    platform_key = platform.strip()
 
-    if platform_lower in {"bilibili", "b站"}:
-        return {
-            "platform": "B站",
-            "description": "获取B站UP主视频数据",
-            "account_id_format": "B站UID（数字，如 12345678）",
-            "account_id_example": "2262501",
-            "note": "当前为模拟数据模式（因B站API风控限制），可配置认证信息后接入真实API",
-        }
+    if platform_key in SUPPORTED_PLATFORMS:
+        internal_id = SUPPORTED_PLATFORMS[platform_key]
+        if internal_id == "bilibili":
+            return {
+                "platform": "B站 (哔哩哔哩)",
+                "description": "获取B站UP主视频数据",
+                "account_id_format": "B站UID（数字，如 12345678）",
+                "account_id_example": "2262501",
+                "note": (
+                    "当前为模拟数据模式（B站API需认证信息才能调用真实接口）。"
+                    "模拟数据已包含完整的视频类型与内容分类字段，可用于演示全部功能。"
+                    "\n\n如需接入真实API，请在 .env 中配置 BILIBILI_SESSDATA。"
+                ),
+            }
 
     return {"platform": platform, "description": "未知平台"}
 

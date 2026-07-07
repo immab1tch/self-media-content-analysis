@@ -142,7 +142,7 @@ def _render_sidebar() -> None:
         with tab2:
             platform = st.selectbox(
                 "选择平台",
-                sorted(SUPPORTED_PLATFORMS),
+                list(SUPPORTED_PLATFORMS.keys()),
                 index=0,
             )
 
@@ -477,12 +477,24 @@ def _local_statistics_answer(question: str) -> Dict[str, Any]:
     stats_text = ""
     try:
         if analysis_type == "recommend":
-            type_analysis = run_analysis(df, "content_type", params={})
-            top_analysis = run_analysis(df, "top", params={"n": 3})
-            stats_text = (
-                "当前为本地统计模式，无法生成 AI 个性化推荐。以下是基于历史数据的参考分析：\n\n"
-                f"{type_analysis}\n\n{top_analysis}"
-            )
+            try:
+                stats_text = run_analysis(df, "recommend", params={})
+                if not stats_text or len(stats_text.strip()) < 20:
+                    # 兜底
+                    type_analysis = run_analysis(df, "content_type", params={})
+                    top_analysis = run_analysis(df, "top", params={"n": 3})
+                    stats_text = (
+                        f"【本地推荐分析】\n\n{type_analysis}\n\n{top_analysis}\n\n"
+                        "建议：延续高表现内容分类的选题方向，结合热门关键词进行创作。"
+                    )
+            except Exception as exc:
+                logger.error("本地 recommend 失败：%s", exc)
+                stats_text = (
+                    "【本地推荐分析】\n基于已有数据的参考建议：\n"
+                    "1. 查看视频类型/内容分类占比分布\n"
+                    "2. 关注播放量 Top 内容的共同特征\n"
+                    "3. 延续高表现的内容分类进行选题"
+                )
         else:
             stats_text = run_analysis(df, analysis_type, params={})
             if not matched and stats_text:

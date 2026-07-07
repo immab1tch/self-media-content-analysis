@@ -24,10 +24,14 @@ plt.rcParams["axes.unicode_minus"] = False
 # 使用非交互后端，避免 GUI 依赖
 matplotlib.use("Agg")
 
-# 相关性分析默认指标列
-_DEFAULT_CORR_COLS = ("播放量", "点赞数", "评论数", "转发数", "收藏数", "粉丝增量")
-# 内容类型列名
-_CONTENT_TYPE_COL = "内容类型"
+# 相关性分析默认指标列（粉丝增量为可选字段，不在默认分析中）
+_DEFAULT_CORR_COLS = ("播放量", "点赞数", "评论数", "转发数", "收藏数")
+# 视频格式类型列名（原"内容类型"，现语义更准确）
+_VIDEO_TYPE_COL = "视频类型"
+# 内容分类列名（新增，存主题领域如美食/旅游/科技等）
+_CONTENT_CATEGORY_COL = "内容分类"
+# 兼容旧字段名：同时支持"视频类型"和旧的"内容类型"
+_TYPE_COLS = ("视频类型", "内容类型")
 # 内容标题列名
 _TITLE_COL = "内容标题"
 # 图表默认尺寸
@@ -263,9 +267,10 @@ def plot_correlation_heatmap(
 
 def plot_content_type_bar(df: pd.DataFrame) -> Any:
     """
-    柱状图：不同内容类型的数量与平均播放量对比（双 Y 轴）。
+    柱状图：不同视频类型（或内容分类）的数量与平均播放量对比（双 Y 轴）。
 
     左轴为内容数量，右轴为平均播放量。
+    优先使用"视频类型"列，若不存在则尝试"内容类型"列。
 
     参数:
         df: 数据 DataFrame。
@@ -273,11 +278,18 @@ def plot_content_type_bar(df: pd.DataFrame) -> Any:
     返回:
         matplotlib Figure 对象。
     """
-    if _CONTENT_TYPE_COL not in df.columns:
-        raise ValueError(f"内容类型柱状图：未找到列 '{_CONTENT_TYPE_COL}'")
+    # 兼容新旧字段名
+    type_col = None
+    for col in _TYPE_COLS:
+        if col in df.columns:
+            type_col = col
+            break
+
+    if type_col is None:
+        raise ValueError(f"内容类型柱状图：未找到视频类型列，可选：{list(df.columns)}")
 
     metric = "播放量" if "播放量" in df.columns else None
-    type_counts = df[_CONTENT_TYPE_COL].value_counts().sort_values(ascending=False)
+    type_counts = df[type_col].value_counts().sort_values(ascending=False)
     types = type_counts.index.tolist()
     counts = type_counts.values.tolist()
 
@@ -286,7 +298,7 @@ def plot_content_type_bar(df: pd.DataFrame) -> Any:
     width = 0.4
 
     bars = ax1.bar(x_pos - width / 2, counts, width, label="内容数量", color="#4C78A8", alpha=0.85)
-    ax1.set_xlabel("内容类型", fontsize=11)
+    ax1.set_xlabel("视频类型", fontsize=11)
     ax1.set_ylabel("内容数量（条）", fontsize=11, color="#4C78A8")
     ax1.tick_params(axis="y", labelcolor="#4C78A8", labelsize=9)
     ax1.tick_params(axis="x", labelsize=10)
@@ -296,7 +308,7 @@ def plot_content_type_bar(df: pd.DataFrame) -> Any:
     subtitle = f"共 {len(types)} 类内容"
     if metric and df[metric].dtype.kind in "biufc":
         avg_plays = [
-            float(df[df[_CONTENT_TYPE_COL] == t][metric].mean()) for t in types
+            float(df[df[type_col] == t][metric].mean()) for t in types
         ]
         subtitle += f"，最高均播：{max(avg_plays):,.0f}"
     ax1.set_title(f"内容类型分布与平均播放量对比\n{subtitle}", fontsize=14, pad=12)
@@ -311,7 +323,7 @@ def plot_content_type_bar(df: pd.DataFrame) -> Any:
 
     if metric and df[metric].dtype.kind in "biufc":
         avg_plays = [
-            float(df[df[_CONTENT_TYPE_COL] == t][metric].mean()) for t in types
+            float(df[df[type_col] == t][metric].mean()) for t in types
         ]
         ax2 = ax1.twinx()
         line = ax2.plot(
@@ -378,6 +390,11 @@ def plot_distribution_box(
         whiskerprops=dict(linewidth=1.2, color="#333"),
         capprops=dict(linewidth=1.2, color="#333"),
     )
+
+    # 标注四分位数数值
+    q1 = float(series.quantile(0.25))
+    med = float(series.median())
+    q3 = float(series.quantile(0.75))
 
     iqr = q3 - q1
     lower = q1 - 1.5 * iqr
