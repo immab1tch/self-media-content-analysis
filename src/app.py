@@ -19,6 +19,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    stream=sys.stdout,
+)
+
+logging.getLogger("streamlit").setLevel(logging.WARNING)
+
 # 将 src 目录加入 sys.path，以便同目录模块可互相导入
 _src_dir = Path(__file__).resolve().parent
 if str(_src_dir) not in sys.path:
@@ -33,6 +41,10 @@ from visualizer import create_chart
 logger = logging.getLogger(__name__)
 from pathlib import Path
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+logger.info("=== 自媒体账号内容数据分析系统启动 ===")
+logger.info(f"Python 版本: {sys.version}")
+logger.info(f"工作目录: {os.getcwd()}")
 
 # 页面配置（必须是首个 Streamlit 命令）
 st.set_page_config(
@@ -66,12 +78,23 @@ def _load_ai_assistant():
     if st.session_state.ai_assistant is not None:
         return
 
+    logger.info("========== 初始化 AI 助手 ==========")
+    logger.info(f"LLM_API_KEY 配置: {'已配置 (' + str(len(os.environ.get('LLM_API_KEY', ''))) + ' 字符)' if os.environ.get('LLM_API_KEY') else '未配置'}")
+    logger.info(f"LLM_API_URL 配置: {os.environ.get('LLM_API_URL', '未配置')}")
+    logger.info(f"LLM_MODEL 配置: {os.environ.get('LLM_MODEL', '未配置')}")
+
     from ai_assistant import AIAssistant
 
     try:
+        logger.info("正在创建 AIAssistant 实例...")
         st.session_state.ai_assistant = AIAssistant(st.session_state.df_processed)
+        logger.info(f"AI 助手初始化成功！降级模式: {st.session_state.ai_assistant.is_degraded}")
+        if st.session_state.ai_assistant.is_degraded:
+            logger.warning("⚠️ 降级模式：AI 服务不可用，将使用本地统计模式")
+        else:
+            logger.info("✅ AI 模式：DeepSeek API 已连接")
     except Exception as exc:
-        logger.error("AI 助手初始化失败：%s", exc)
+        logger.error("❌ AI 助手初始化失败：%s", exc, exc_info=True)
         st.error(f"AI 助手初始化失败：{exc}")
         st.session_state.ai_assistant = None
 
@@ -385,6 +408,9 @@ def _process_question(question: str) -> None:
     参数:
         question: 用户问题文本。
     """
+    logger.info("\n========== 处理用户问题 ==========")
+    logger.info(f"问题: {question}")
+
     # 先添加用户消息到历史
     st.session_state.chat_history.append({
         "role": "user",
@@ -395,6 +421,7 @@ def _process_question(question: str) -> None:
     has_history = len(
         [m for m in st.session_state.chat_history if m["role"] == "assistant"]
     ) > 0
+    logger.info(f"是否追问: {has_history}")
 
     # 懒加载 AI 助手
     _load_ai_assistant()
@@ -406,19 +433,23 @@ def _process_question(question: str) -> None:
     }
 
     if st.session_state.ai_assistant is not None and not st.session_state.ai_assistant.is_degraded:
-        # AI 模式
+        logger.info("模式: AI 模式")
         try:
             if has_history:
+                logger.info("调用: ask_followup")
                 result = st.session_state.ai_assistant.ask_followup(question)
             else:
+                logger.info("调用: ask")
                 result = st.session_state.ai_assistant.ask(question)
+            logger.info(f"AI 返回结果: conclusion长度={len(result.get('conclusion',''))}, analysis_type={result.get('analysis_type')}, chart={'有' if result.get('chart') else '无'}")
         except Exception as exc:
-            logger.error("AI 问答失败：%s", exc)
+            logger.error("❌ AI 问答失败：%s", exc, exc_info=True)
             result["conclusion"] = f"AI 服务调用失败：{exc}"
             result["analysis_type"] = None
     else:
-        # 降级模式：用关键词匹配走本地统计
+        logger.info("模式: 降级模式（本地统计）")
         result = _local_statistics_answer(question)
+        logger.info(f"本地统计结果: conclusion长度={len(result.get('conclusion',''))}, analysis_type={result.get('analysis_type')}")
 
     # 存储助手回复
     assistant_msg = {
