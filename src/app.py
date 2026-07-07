@@ -125,7 +125,7 @@ def _handle_file_upload(uploaded_file) -> None:
 def _render_sidebar() -> None:
     """渲染侧边栏：文件上传 + 自动获取 + 数据预览。"""
     with st.sidebar:
-        st.header("📁 数据管理")
+        st.title("⚙️ 数据配置")
         st.markdown("---")
 
         tab1, tab2 = st.tabs(["📤 上传文件", "🔗 自动获取"])
@@ -233,6 +233,12 @@ def _render_sidebar() -> None:
                     except Exception as exc:
                         st.error(f"示例数据加载失败：{exc}")
 
+        api_key = os.environ.get("LLM_API_KEY", "").strip()
+        if api_key:
+            st.caption("✅ AI 智能分析模式（DeepSeek API 已连接）")
+        else:
+            st.caption("⚠️ 本地统计模式（未配置 API Key）")
+
 
 def _render_degraded_warning() -> None:
     """渲染降级模式提示（API 未配置时）。"""
@@ -259,11 +265,26 @@ def _render_chat_input() -> Optional[str]:
     """
     st.subheader("💬 AI 数据分析助手")
 
-    # 判断是否可提问
     disabled = st.session_state.df_processed is None
     if disabled:
         st.info("请先在侧边栏上传数据文件，然后开始提问。")
         return None
+
+    quick_questions = [
+        "📈 分析播放量趋势",
+        "🔗 各指标相关性分析",
+        "🏆 播放量 Top 5 内容",
+        "📊 内容类型占比分析",
+        "💡 推荐下一步内容方向",
+        "📋 数据整体描述统计",
+    ]
+
+    selected_question = None
+    cols = st.columns(3)
+    for i, q in enumerate(quick_questions):
+        with cols[i % 3]:
+            if st.button(q, use_container_width=True):
+                selected_question = q
 
     with st.form("chat_form", clear_on_submit=True):
         col1, col2 = st.columns([8, 1])
@@ -279,6 +300,8 @@ def _render_chat_input() -> Optional[str]:
 
     if submitted and question and question.strip():
         return question.strip()
+    if selected_question:
+        return selected_question
     return None
 
 
@@ -293,8 +316,7 @@ def _render_conclusion(result: Dict[str, Any]) -> None:
     analysis_type = result.get("analysis_type")
 
     with st.container():
-        # AI 生成标签
-        tag = "🤖 AI 分析"
+        tag = "🤖 AI 智能分析"
         if analysis_type:
             type_names = {
                 "describe": "描述性统计",
@@ -303,12 +325,13 @@ def _render_conclusion(result: Dict[str, Any]) -> None:
                 "content_type": "内容类型分析",
                 "top": "Top N 分析",
                 "distribution": "分布分析",
+                "recommend": "内容推荐分析",
                 "content_recommend": "内容推荐分析",
             }
             type_name = type_names.get(analysis_type, analysis_type)
             tag += f" · {type_name}"
 
-        st.info(f"**{tag}**\n\n{conclusion}")
+        st.success(f"**{tag}**\n\n{conclusion}")
 
 
 def _render_chart(result: Dict[str, Any]) -> None:
@@ -339,7 +362,7 @@ def _render_history() -> None:
         return
 
     st.markdown("---")
-    st.subheader("📜 对话历史")
+    st.subheader("� 对话历史")
 
     for idx, msg in enumerate(st.session_state.chat_history):
         if msg["role"] == "user":
@@ -349,6 +372,7 @@ def _render_history() -> None:
             with st.chat_message("assistant"):
                 _render_conclusion(msg)
                 if msg.get("chart") is not None:
+                    st.subheader("📊 可视化图表")
                     _render_chart(msg)
 
 
@@ -418,7 +442,6 @@ def _local_statistics_answer(question: str) -> Dict[str, Any]:
     if df is None:
         return {"conclusion": "暂无数据。", "chart": None, "analysis_type": None}
 
-    # 关键词 → analysis_type 映射
     keyword_map = [
         ("趋势", "trend"),
         ("变化", "trend"),
@@ -434,27 +457,44 @@ def _local_statistics_answer(question: str) -> Dict[str, Any]:
         ("排名", "top"),
         ("最高", "top"),
         ("最大", "top"),
-        ("推荐", "content_recommend"),
-        ("选题", "content_recommend"),
-        ("建议", "content_recommend"),
+        ("推荐", "recommend"),
+        ("建议", "recommend"),
+        ("下一步", "recommend"),
+        ("拍什么", "recommend"),
+        ("做什么", "recommend"),
+        ("内容方向", "recommend"),
     ]
     q = question.lower()
     analysis_type = "describe"
+    matched = False
     for keyword, atype in keyword_map:
         if keyword in q:
             analysis_type = atype
+            matched = True
             break
 
     chart = None
     stats_text = ""
     try:
-        stats_text = run_analysis(df, analysis_type, params={})
+        if analysis_type == "recommend":
+            type_analysis = run_analysis(df, "content_type", params={})
+            top_analysis = run_analysis(df, "top", params={"n": 3})
+            stats_text = (
+                "当前为本地统计模式，无法生成 AI 个性化推荐。以下是基于历史数据的参考分析：\n\n"
+                f"{type_analysis}\n\n{top_analysis}"
+            )
+        else:
+            stats_text = run_analysis(df, analysis_type, params={})
+            if not matched and stats_text:
+                stats_text = f"未识别到特定的分析意图，以下为数据整体描述统计：\n\n{stats_text}"
     except Exception as exc:
         logger.error("本地统计分析失败：%s", exc)
         if analysis_type != "describe":
             analysis_type = "describe"
             try:
                 stats_text = run_analysis(df, analysis_type, params={})
+                if stats_text:
+                    stats_text = f"未识别到特定的分析意图，以下为数据整体描述统计：\n\n{stats_text}"
             except Exception as exc2:
                 logger.error("本地 describe 也失败：%s", exc2)
                 stats_text = ""
@@ -467,6 +507,7 @@ def _local_statistics_answer(question: str) -> Dict[str, Any]:
             "content_type": True,
             "top": True,
             "distribution": True,
+            "recommend": False,
             "content_recommend": False,
         }
         if chart_available.get(analysis_type, False):
@@ -474,10 +515,7 @@ def _local_statistics_answer(question: str) -> Dict[str, Any]:
     except Exception as exc:
         logger.error("本地图表生成失败：%s", exc)
 
-    conclusion = (
-        "【本地统计分析结果】\n\n"
-        f"{stats_text}"
-    ) if stats_text else "本地统计分析失败。"
+    conclusion = stats_text if stats_text else "本地统计分析失败。"
 
     return {
         "conclusion": conclusion,
@@ -490,16 +528,14 @@ def _render_main_area() -> None:
     """渲染主区域：问答输入 + 最新结果 + 历史。"""
     st.title("📊 自媒体账号内容数据分析系统")
     st.caption("AI 驱动的自然语言数据分析助手 · 导入数据，用大白话提问，即刻获得结论与图表")
-    st.markdown("---")
+    st.divider()
 
     _render_degraded_warning()
 
-    # 问答输入
     question = _render_chat_input()
     if question:
         _process_question(question)
 
-    # 展示对话历史（最新的在最下方，倒序渲染但历史从上到下）
     if st.session_state.chat_history:
         st.markdown("---")
         for msg in st.session_state.chat_history:
@@ -509,7 +545,9 @@ def _render_main_area() -> None:
             else:
                 with st.chat_message("assistant"):
                     _render_conclusion(msg)
-                    _render_chart(msg)
+                    if msg.get("chart") is not None:
+                        st.subheader("📊 可视化图表")
+                        _render_chart(msg)
     else:
         if st.session_state.df_processed is not None:
             st.info(

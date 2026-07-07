@@ -136,17 +136,47 @@ def plot_trend(
     # matplotlib
     fig, ax = plt.subplots(figsize=_DEFAULT_FIGSIZE)
     ax.plot(grouped.index, grouped.values, marker="o", linewidth=2, color="#4C78A8")
-    ax.set_title(f"{metric}{grain_label}度趋势", fontsize=14, pad=12)
-    ax.set_xlabel("日期", fontsize=11)
-    ax.set_ylabel(metric, fontsize=11)
-    ax.tick_params(axis="both", labelsize=9)
-    ax.grid(True, alpha=0.3, linestyle="--")
 
     for x, y in zip(grouped.index, grouped.values):
         ax.text(
             x, y + max(grouped.values) * 0.01,
             f"{y:.0f}", ha="center", va="bottom", fontsize=8,
         )
+
+    if len(grouped) > 0:
+        peak_idx = grouped.idxmax()
+        peak_val = grouped.max()
+        ax.annotate(
+            f"峰值 {peak_val:.0f}",
+            xy=(peak_idx, peak_val),
+            xytext=(peak_idx, peak_val + max(grouped.values) * 0.08),
+            arrowprops=dict(arrowstyle="->", color="#E45756", lw=1.5),
+            ha="center", va="bottom", fontsize=8, color="#E45756",
+        )
+
+        valley_idx = grouped.idxmin()
+        valley_val = grouped.min()
+        ax.annotate(
+            f"谷值 {valley_val:.0f}",
+            xy=(valley_idx, valley_val),
+            xytext=(valley_idx, valley_val - max(grouped.values) * 0.08),
+            arrowprops=dict(arrowstyle="->", color="#54A24B", lw=1.5),
+            ha="center", va="top", fontsize=8, color="#54A24B",
+        )
+
+        start_val = grouped.iloc[0]
+        end_val = grouped.iloc[-1]
+        change_rate = ((end_val - start_val) / start_val * 100) if start_val != 0 else 0
+        date_range = f"{grouped.index[0].strftime('%Y-%m')} 至 {grouped.index[-1].strftime('%Y-%m')}"
+        subtitle = f"{date_range}，总{'增长' if change_rate >= 0 else '下降'} {change_rate:+.1f}%"
+        ax.set_title(f"{metric}{grain_label}度趋势\n{subtitle}", fontsize=14, pad=12)
+    else:
+        ax.set_title(f"{metric}{grain_label}度趋势", fontsize=14, pad=12)
+
+    ax.set_xlabel("日期", fontsize=11)
+    ax.set_ylabel(metric, fontsize=11)
+    ax.tick_params(axis="both", labelsize=9)
+    ax.grid(True, alpha=0.3, linestyle="--")
 
     fig.autofmt_xdate()
     fig.tight_layout()
@@ -211,7 +241,7 @@ def plot_correlation_heatmap(
     ax.set_xticklabels(avail_cols, rotation=45, ha="right")
     ax.set_yticks(range(len(avail_cols)))
     ax.set_yticklabels(avail_cols)
-    ax.set_title("指标相关性热力图", fontsize=14, pad=12)
+    ax.set_title("指标相关性热力图\n数值为皮尔逊相关系数，|r|>0.7 为强相关", fontsize=14, pad=12)
     ax.tick_params(axis="both", labelsize=9)
 
     # 在每个格子里标注数值
@@ -262,7 +292,14 @@ def plot_content_type_bar(df: pd.DataFrame) -> Any:
     ax1.tick_params(axis="x", labelsize=10)
     ax1.set_xticks(x_pos)
     ax1.set_xticklabels(types)
-    ax1.set_title("内容类型分布与平均播放量对比", fontsize=14, pad=12)
+
+    subtitle = f"共 {len(types)} 类内容"
+    if metric and df[metric].dtype.kind in "biufc":
+        avg_plays = [
+            float(df[df[_CONTENT_TYPE_COL] == t][metric].mean()) for t in types
+        ]
+        subtitle += f"，最高均播：{max(avg_plays):,.0f}"
+    ax1.set_title(f"内容类型分布与平均播放量对比\n{subtitle}", fontsize=14, pad=12)
 
     for bar, val in zip(bars, counts):
         ax1.text(
@@ -342,30 +379,24 @@ def plot_distribution_box(
         capprops=dict(linewidth=1.2, color="#333"),
     )
 
-    # 标注四分位数数值
-    q1 = float(series.quantile(0.25))
-    med = float(series.median())
-    q3 = float(series.quantile(0.75))
+    iqr = q3 - q1
+    lower = q1 - 1.5 * iqr
+    upper = q3 + 1.5 * iqr
+    outliers = series[(series < lower) | (series > upper)]
+    outlier_count = int(len(outliers))
+
     ax.text(1.15, q1, f"Q1={q1:.0f}", va="center", fontsize=9, color="#333")
     ax.text(1.15, med, f"中位数={med:.0f}", va="center", fontsize=9, color="#E45756")
     ax.text(1.15, q3, f"Q3={q3:.0f}", va="center", fontsize=9, color="#333")
 
-    ax.set_title(f"{metric} 分布箱形图", fontsize=14, pad=12)
-    ax.set_ylabel(metric, fontsize=11)
-    ax.tick_params(axis="both", labelsize=10)
-    ax.grid(True, alpha=0.3, linestyle="--", axis="y")
+    for outlier_val in outliers:
+        ax.text(
+            1.18, outlier_val, f"{outlier_val:.0f}",
+            va="center", fontsize=8, color="#E45756",
+        )
 
-    # 统计异常值数量
-    iqr = q3 - q1
-    lower = q1 - 1.5 * iqr
-    upper = q3 + 1.5 * iqr
-    outliers = int(((series < lower) | (series > upper)).sum())
-    ax.text(
-        0.5, 0.95, f"异常值：{outliers} 条",
-        transform=ax.transAxes, ha="center", va="top",
-        fontsize=10, color="#E45756",
-        bbox=dict(boxstyle="round,pad=0.3", facecolor="#fff0f0", alpha=0.8),
-    )
+    subtitle = f"IQR: {iqr:.0f}，异常值: {outlier_count} 个"
+    ax.set_title(f"{metric} 分布箱形图\n{subtitle}", fontsize=14, pad=12)
 
     fig.tight_layout()
     return fig
@@ -411,9 +442,11 @@ def plot_top_content(
     ax.set_yticks(y_pos)
     ax.set_yticklabels(display_titles, fontsize=10)
     ax.set_xlabel(metric, fontsize=11)
-    ax.set_title(f"Top {len(top_df)} 内容排行（按 {metric}）", fontsize=14, pad=12)
+
+    subtitle = f"Top {len(top_df)}，最高：{max(values):,.0f}" if len(values) > 0 else f"Top {len(top_df)}"
+    ax.set_title(f"{metric} Top {len(top_df)} 内容排行\n{subtitle}", fontsize=14, pad=12)
     ax.tick_params(axis="x", labelsize=9)
-    ax.invert_yaxis()  # 最大的在顶部
+    ax.invert_yaxis()
 
     # 数值标注
     max_val = max(values) if len(values) > 0 else 1

@@ -34,12 +34,13 @@ logger = logging.getLogger(__name__)
 
 # analysis_type → 是否有对应图表
 _CHART_AVAILABLE = {
-    "describe": False,  # 描述性统计无对应图表
+    "describe": False,
     "correlation": True,
     "trend": True,
     "content_type": True,
     "top": True,
     "distribution": True,
+    "recommend": False,
 }
 
 # 降级时使用的 analysis_type
@@ -207,16 +208,19 @@ class AIAssistant:
         # 解析成功：触发统计分析 + 图表生成
         chart = None
         stats_text = ""
-        try:
-            stats_text = run_analysis(self._df, analysis_type, params={})
-            # 将统计依据追加到结论后（标注为底层统计）
-            if stats_text:
-                conclusion = (
-                    f"{conclusion}\n\n"
-                    f"—— 底层统计依据 ——\n{stats_text}"
-                )
-        except Exception as exc:
-            logger.error("调用 analyzer 失败（type=%s）：%s", analysis_type, exc)
+
+        if analysis_type == "recommend":
+            logger.info("recommend 类型：跳过本地分析，直接返回 AI 结论。")
+        else:
+            try:
+                stats_text = run_analysis(self._df, analysis_type, params={})
+                if stats_text:
+                    conclusion = (
+                        f"{conclusion}\n\n"
+                        f"—— 底层统计依据 ——\n{stats_text}"
+                    )
+            except Exception as exc:
+                logger.error("调用 analyzer 失败（type=%s）：%s", analysis_type, exc)
 
         try:
             if _CHART_AVAILABLE.get(analysis_type, False):
@@ -251,23 +255,34 @@ class AIAssistant:
         """
         logger.warning("降级响应触发，原因：%s", reason)
 
-        # 尝试根据问题关键词选择更贴近的分析类型
         analysis_type = self._guess_analysis_type(question)
         chart = None
         stats_text = ""
 
-        try:
-            stats_text = run_analysis(self._df, analysis_type, params={})
-        except Exception as exc:
-            logger.error("降级统计分析失败（type=%s）：%s", analysis_type, exc)
-            # 再次降级到 describe
-            if analysis_type != _FALLBACK_ANALYSIS_TYPE:
-                analysis_type = _FALLBACK_ANALYSIS_TYPE
-                try:
-                    stats_text = run_analysis(self._df, analysis_type, params={})
-                except Exception as exc2:
-                    logger.error("降级 describe 也失败：%s", exc2)
-                    stats_text = ""
+        if analysis_type == "recommend":
+            logger.info("recommend 类型降级：返回数据参考分析。")
+            try:
+                type_analysis = run_analysis(self._df, "content_type", params={})
+                top_analysis = run_analysis(self._df, "top", params={"n": 3})
+                stats_text = (
+                    "当前为本地统计模式，无法生成 AI 个性化推荐。以下是基于历史数据的参考分析：\n\n"
+                    f"{type_analysis}\n\n{top_analysis}"
+                )
+            except Exception as exc:
+                logger.error("recommend 降级统计失败：%s", exc)
+                stats_text = "当前为本地统计模式，无法生成 AI 个性化推荐。"
+        else:
+            try:
+                stats_text = run_analysis(self._df, analysis_type, params={})
+            except Exception as exc:
+                logger.error("降级统计分析失败（type=%s）：%s", analysis_type, exc)
+                if analysis_type != _FALLBACK_ANALYSIS_TYPE:
+                    analysis_type = _FALLBACK_ANALYSIS_TYPE
+                    try:
+                        stats_text = run_analysis(self._df, analysis_type, params={})
+                    except Exception as exc2:
+                        logger.error("降级 describe 也失败：%s", exc2)
+                        stats_text = ""
 
         try:
             if _CHART_AVAILABLE.get(analysis_type, False):
@@ -280,7 +295,6 @@ class AIAssistant:
             f"{stats_text}"
         ) if stats_text else "AI 服务暂时不可用，且本地统计分析失败。"
 
-        # 存入历史
         self._context.add_message("user", question)
         self._context.add_message("assistant", conclusion)
 
@@ -317,6 +331,12 @@ class AIAssistant:
             ("排名", "top"),
             ("前几", "top"),
             ("最高", "top"),
+            ("推荐", "recommend"),
+            ("建议", "recommend"),
+            ("下一步", "recommend"),
+            ("拍什么", "recommend"),
+            ("做什么", "recommend"),
+            ("内容方向", "recommend"),
         ]
         for keyword, atype in keyword_map:
             if keyword in q:
