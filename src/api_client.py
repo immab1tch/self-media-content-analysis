@@ -33,7 +33,8 @@ class LLMClient:
         环境变量：
             LLM_API_KEY: API 密钥（必填）。
             LLM_API_URL: 完整的 Chat Completions 端点 URL。
-            LLM_MODEL: 模型名称，默认 deepseek-chat。
+                默认 https://api.deepseek.com/chat/completions
+            LLM_MODEL: 模型名称，默认 deepseek-v4-flash。
             LLM_TIMEOUT: 请求超时秒数，默认 30。
 
         异常:
@@ -47,10 +48,10 @@ class LLMClient:
 
         self._api_url = os.environ.get(
             "LLM_API_URL",
-            "https://api.deepseek.com/v1/chat/completions",
+            "https://api.deepseek.com/chat/completions",
         ).strip()
 
-        self._model = os.environ.get("LLM_MODEL", "deepseek-chat").strip()
+        self._model = os.environ.get("LLM_MODEL", "deepseek-v4-flash").strip()
 
         timeout_str = os.environ.get("LLM_TIMEOUT", "30").strip()
         try:

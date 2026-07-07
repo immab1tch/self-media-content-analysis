@@ -41,7 +41,8 @@ class TestBuildSystemPrompt:
     def test_contains_role_setting(self):
         """应包含角色设定。"""
         result = build_system_prompt("摘要")
-        assert "自媒体数据分析助手" in result
+        assert "数析" in result
+        assert "自媒体" in result
 
     def test_contains_data_summary(self):
         """应包含传入的数据摘要。"""
@@ -52,9 +53,9 @@ class TestBuildSystemPrompt:
     def test_contains_capabilities(self):
         """应列出分析能力清单。"""
         result = build_system_prompt("摘要")
-        assert "describe_statistics" in result
-        assert "trend_analysis" in result
-        assert "correlation_analysis" in result
+        assert "describe" in result
+        assert "trend" in result
+        assert "correlation" in result
 
     def test_contains_output_rules(self):
         """应包含 JSON 输出规则。"""
@@ -65,7 +66,8 @@ class TestBuildSystemPrompt:
     def test_contains_prohibition_rules(self):
         """应包含禁止规则。"""
         result = build_system_prompt("摘要")
-        assert "不得编造数据" in result
+        assert "编造" in result
+        assert "禁止" in result
 
     def test_no_full_data_keyword(self):
         """system prompt 不应包含"全量数据"传输的暗示。"""

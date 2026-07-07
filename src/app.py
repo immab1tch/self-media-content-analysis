@@ -235,9 +235,10 @@ def _render_sidebar() -> None:
 
         api_key = os.environ.get("LLM_API_KEY", "").strip()
         if api_key:
-            st.caption("✅ AI 智能分析模式（DeepSeek API 已连接）")
+            model = os.environ.get("LLM_MODEL", "deepseek-v4-flash")
+            st.caption(f"🤖 AI 智能模式（{model}）")
         else:
-            st.caption("⚠️ 本地统计模式（未配置 API Key）")
+            st.caption("📊 本地统计模式（配置 API Key 可开启 AI 对话）")
 
 
 def _render_degraded_warning() -> None:
@@ -247,11 +248,10 @@ def _render_degraded_warning() -> None:
         return
 
     if not st.session_state.degraded_warning_shown:
-        st.warning(
-            "⚠️ 未检测到大模型 API 密钥，当前为**本地统计模式**。"
-            "分析结果基于本地统计算法生成，不具备自然语言理解能力。"
-            "如需 AI 智能分析，请在 `.env` 文件中配置 `LLM_API_KEY`。",
-            icon="🤖",
+        st.info(
+            "💡 **提示**：未配置 AI 密钥，当前使用本地统计模式。"
+            "在 `.env` 文件中配置 `LLM_API_KEY`（DeepSeek API Key）即可开启 AI 智能对话。"
+            "\n\n本地模式也能做数据分析和图表，只是没有 AI 对话那么智能。",
         )
         st.session_state.degraded_warning_shown = True
 
@@ -307,7 +307,7 @@ def _render_chat_input() -> Optional[str]:
 
 def _render_conclusion(result: Dict[str, Any]) -> None:
     """
-    渲染 AI 分析结论文字。
+    渲染 AI 分析结论文字，模仿 ChatGPT 风格。
 
     参数:
         result: AI 助手返回的结果字典。
@@ -315,23 +315,25 @@ def _render_conclusion(result: Dict[str, Any]) -> None:
     conclusion = result.get("conclusion", "")
     analysis_type = result.get("analysis_type")
 
-    with st.container():
-        tag = "🤖 AI 智能分析"
-        if analysis_type:
-            type_names = {
-                "describe": "描述性统计",
-                "correlation": "相关性分析",
-                "trend": "趋势分析",
-                "content_type": "内容类型分析",
-                "top": "Top N 分析",
-                "distribution": "分布分析",
-                "recommend": "内容推荐分析",
-                "content_recommend": "内容推荐分析",
-            }
-            type_name = type_names.get(analysis_type, analysis_type)
-            tag += f" · {type_name}"
+    if not conclusion:
+        return
 
-        st.success(f"**{tag}**\n\n{conclusion}")
+    # 分析类型标签（小巧不抢眼）
+    if analysis_type:
+        type_names = {
+            "describe": "📋 数据概览",
+            "correlation": "🔗 相关性分析",
+            "trend": "📈 趋势分析",
+            "content_type": "📊 类型对比",
+            "top": "🏆 排行榜",
+            "distribution": "📉 分布分析",
+            "recommend": "💡 内容推荐",
+            "content_recommend": "💡 内容推荐",
+        }
+        type_name = type_names.get(analysis_type, analysis_type)
+        st.caption(type_name)
+
+    st.markdown(conclusion)
 
 
 def _render_chart(result: Dict[str, Any]) -> None:
@@ -537,7 +539,7 @@ def _local_statistics_answer(question: str) -> Dict[str, Any]:
 
 
 def _render_main_area() -> None:
-    """渲染主区域：问答输入 + 最新结果 + 历史。"""
+    """渲染主区域：问答输入 + 对话历史。"""
     st.title("📊 自媒体账号内容数据分析系统")
     st.caption("AI 驱动的自然语言数据分析助手 · 导入数据，用大白话提问，即刻获得结论与图表")
     st.divider()
@@ -546,28 +548,31 @@ def _render_main_area() -> None:
 
     question = _render_chat_input()
     if question:
-        _process_question(question)
+        with st.spinner("🤔 正在分析你的数据..."):
+            _process_question(question)
 
     if st.session_state.chat_history:
         st.markdown("---")
-        for msg in st.session_state.chat_history:
+        # 倒序展示，最新对话在最上面（更像聊天软件）
+        for msg in reversed(st.session_state.chat_history):
             if msg["role"] == "user":
                 with st.chat_message("user"):
                     st.markdown(msg["content"])
             else:
-                with st.chat_message("assistant"):
+                with st.chat_message("assistant", avatar="🤖"):
                     _render_conclusion(msg)
                     if msg.get("chart") is not None:
-                        st.subheader("📊 可视化图表")
-                        _render_chart(msg)
+                        with st.expander("📊 查看图表", expanded=True):
+                            _render_chart(msg)
     else:
         if st.session_state.df_processed is not None:
             st.info(
-                "👋 数据已加载！试着问我一些问题，例如：\n"
-                "- 播放量趋势如何？\n"
-                "- 哪种内容类型表现最好？\n"
-                "- 播放量和点赞数的相关性怎么样？\n"
-                "- 播放量最高的 5 条内容是哪些？"
+                "👋 数据已加载！试着问我一些问题，例如：\n\n"
+                "- 📈 播放量趋势如何？\n"
+                "- 🔗 播放量和点赞数的相关性怎么样？\n"
+                "- 🏆 播放量最高的 5 条内容是哪些？\n"
+                "- 📊 哪种内容分类表现最好？\n"
+                "- 💡 推荐下一步做什么内容？"
             )
 
 

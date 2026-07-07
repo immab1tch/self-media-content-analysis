@@ -9,9 +9,11 @@ AI 自然语言数据分析助手核心编排模块。
 1. 此模块不直接处理用户界面，只返回结构化数据。
 2. 图表对象返回后由调用方（app.py）决定如何展示。
 3. API 调用失败时降级为本地统计分析，保证可用性。
+4. 推荐类问题自动联网搜索最新趋势作为补充上下文。
 """
 
 import logging
+import requests
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -162,6 +164,8 @@ class AIAssistant:
         """
         执行问答核心流水线：调用模型 → 解析 → 触发分析 → 生成图表 → 存历史。
 
+        推荐类问题会自动联网搜索最新趋势作为补充上下文。
+
         参数:
             question: 原始用户问题（用于历史记录）。
             messages: 发送给大模型的完整消息列表。
@@ -173,6 +177,20 @@ class AIAssistant:
         if self._degraded_mode or self._llm_client is None:
             logger.info("降级模式：返回本地统计分析结果。")
             return self._fallback_response(question, reason="AI 服务未配置")
+
+        # 对于推荐/建议类问题，尝试联网搜索补充上下文
+        search_context = self._try_web_search(question)
+        if search_context:
+            # 将搜索结果注入 system prompt
+            enhanced_system = (
+                self._system_prompt
+                + f"\n\n# 联网搜索补充信息（来自实时网络搜索，可作为推荐参考）\n{search_context}"
+            )
+            messages = [
+                {"role": "system", "content": enhanced_system},
+                messages[1],  # user message
+            ]
+            logger.info("已注入联网搜索结果（长度=%d）", len(search_context))
 
         # 调用大模型
         try:
@@ -343,6 +361,67 @@ class AIAssistant:
             "chart": chart,
             "analysis_type": analysis_type if stats_text else None,
         }
+
+    @staticmethod
+    def _try_web_search(question: str) -> str:
+        """
+        对推荐/建议类问题尝试联网搜索最新趋势。
+
+        仅在问题包含推荐意图关键词时才触发搜索，
+        避免不必要的网络请求。
+
+        参数:
+            question: 用户问题文本。
+
+        返回:
+            搜索结果文本（可能为空字符串）。
+        """
+        recommend_keywords = [
+            "推荐", "建议", "下一步", "拍什么", "做什么",
+            "内容方向", "选题", "趋势", "热门", "火",
+        ]
+        q_lower = question.lower()
+        if not any(kw in q_lower for kw in recommend_keywords):
+            return ""
+
+        # 构建搜索查询：结合内容领域
+        search_query = f"自媒体内容创作趋势 2026 热门选题方向"
+        logger.info("触发联网搜索：%s", search_query)
+
+        try:
+            # 使用 DuckDuckGo 瞬时搜索（无需 API Key）
+            resp = requests.get(
+                "https://api.duckduckgo.com/",
+                params={
+                    "q": search_query,
+                    "format": "json",
+                    "no_html": 1,
+                    "skip_disambig": 1,
+                },
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                snippets = []
+                # 提取 Abstract
+                abstract = data.get("AbstractText", "")
+                if abstract:
+                    snippets.append(abstract)
+                # 提取 RelatedTopics
+                for topic in data.get("RelatedTopics", [])[:5]:
+                    text = topic.get("Text", "")
+                    if text:
+                        snippets.append(text)
+                if snippets:
+                    result = "以下是最新的自媒体创作趋势信息：\n" + "\n".join(
+                        f"- {s}" for s in snippets[:8]
+                    )
+                    logger.info("联网搜索成功，获取 %d 条结果", len(snippets))
+                    return result
+        except Exception as exc:
+            logger.warning("联网搜索失败（不影响主流程）：%s", exc)
+
+        return ""
 
     @staticmethod
     def _guess_analysis_type(question: str) -> str:
