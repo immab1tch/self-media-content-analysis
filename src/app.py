@@ -70,6 +70,14 @@ def _load_ai_assistant():
 
     try:
         st.session_state.ai_assistant = AIAssistant(st.session_state.df_processed)
+        # 诊断：明确打印 AI 模式状态
+        if st.session_state.ai_assistant.is_degraded:
+            logger.warning(
+                "⚠️ AI 助手处于降级模式（未配置 LLM_API_KEY），"
+                "将使用本地统计分析。请在 .env 文件中配置 DeepSeek API Key。"
+            )
+        else:
+            logger.info("✅ AI 助手初始化成功，使用 DeepSeek API 智能模式")
     except Exception as exc:
         logger.error("AI 助手初始化失败：%s", exc)
         st.error(f"AI 助手初始化失败：{exc}")
@@ -236,9 +244,18 @@ def _render_sidebar() -> None:
         api_key = os.environ.get("LLM_API_KEY", "").strip()
         if api_key:
             model = os.environ.get("LLM_MODEL", "deepseek-v4-flash")
-            st.caption(f"🤖 AI 智能模式（{model}）")
+            st.success(f"🤖 AI 智能模式（{model}）")
         else:
-            st.caption("📊 本地统计模式（配置 API Key 可开启 AI 对话）")
+            st.error("📊 本地统计模式（未配置 API Key）")
+            st.markdown(
+                "要开启 **AI 对话功能**，请在项目根目录的 `.env` 文件中添加：\n"
+                "```\n"
+                "LLM_API_KEY=sk-你的DeepSeek密钥\n"
+                "LLM_MODEL=deepseek-v4-flash\n"
+                "```\n\n"
+                "👉 获取密钥：[platform.deepseek.com/api_keys](https://platform.deepseek.com/api_keys)",
+                unsafe_allow_html=False,
+            )
 
 
 def _render_degraded_warning() -> None:
@@ -314,9 +331,16 @@ def _render_conclusion(result: Dict[str, Any]) -> None:
     """
     conclusion = result.get("conclusion", "")
     analysis_type = result.get("analysis_type")
+    is_fallback = result.get("is_fallback", False)
 
     if not conclusion:
         return
+
+    # 诊断标签：显示当前是 AI 模式还是本地模式
+    if is_fallback:
+        st.caption("📊 本地统计模式（AI 未接入）")
+    else:
+        st.caption("🤖 AI 智能分析")
 
     # 分析类型标签（小巧不抢眼）
     if analysis_type:
@@ -350,10 +374,10 @@ def _render_chart(result: Dict[str, Any]) -> None:
     # 判断是 matplotlib 还是 plotly
     if hasattr(chart, "update_layout") and hasattr(chart, "write_image"):
         # plotly Figure
-        st.plotly_chart(chart, use_container_width=True)
+        st.plotly_chart(chart, width="stretch")
     elif hasattr(chart, "savefig"):
         # matplotlib Figure
-        st.pyplot(chart, use_container_width=True)
+        st.pyplot(chart, width="stretch")
     else:
         logger.warning("未知图表类型：%s", type(chart).__name__)
 
@@ -412,20 +436,24 @@ def _process_question(question: str) -> None:
                 result = st.session_state.ai_assistant.ask_followup(question)
             else:
                 result = st.session_state.ai_assistant.ask(question)
+            result["is_fallback"] = False
         except Exception as exc:
             logger.error("AI 问答失败：%s", exc)
             result["conclusion"] = f"AI 服务调用失败：{exc}"
             result["analysis_type"] = None
+            result["is_fallback"] = True
     else:
         # 降级模式：用关键词匹配走本地统计
         result = _local_statistics_answer(question)
+        result["is_fallback"] = True
 
-    # 存储助手回复
+    # 存储助手回复（包含 is_fallback 标记用于UI展示）
     assistant_msg = {
         "role": "assistant",
         "content": result.get("conclusion", ""),
         "chart": result.get("chart"),
         "analysis_type": result.get("analysis_type"),
+        "is_fallback": result.get("is_fallback", True),
     }
     st.session_state.chat_history.append(assistant_msg)
 
