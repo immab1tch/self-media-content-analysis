@@ -110,14 +110,73 @@ class LLMClient:
             ValueError: 返回格式不符合预期时抛出。
         """
         try:
-            choices = response_json["choices"]
+            # 记录完整响应用于诊断（仅记录结构摘要，不含大量文本）
+            if logger.isEnabledFor(logging.DEBUG):
+                try:
+                    usage = response_json.get("usage", {})
+                    model = response_json.get("model", "?")
+                    choices_count = len(response_json.get("choices", []))
+                    logger.debug(
+                        "API 原始响应摘要: model=%s, choices=%d, usage=%s",
+                        model, choices_count, usage,
+                    )
+                except Exception:
+                    pass
+
+            choices = response_json.get("choices")
             if not isinstance(choices, list) or len(choices) == 0:
+                logger.error(
+                    "API 返回的 choices 字段异常: %s",
+                    str(response_json)[:300],
+                )
                 raise ValueError("choices 字段为空或不是列表")
-            message = choices[0]["message"]
-            content = message["content"]
+
+            message = choices[0].get("message", {})
+            if not isinstance(message, dict):
+                raise ValueError(f"message 不是字典类型：{type(message).__name__}")
+
+            # 兼容：有些模型可能用 reasoning_content 而非 content
+            content = message.get("content")
+
+            # 关键诊断：content 为 None 或非字符串时的处理
+            if content is None:
+                # 检查是否有 reasoning_content（思考模式）
+                reasoning = message.get("reasoning_content", "")
+                finish_reason = choices[0].get("finish_reason", "?")
+                logger.warning(
+                    "API 返回 content=None, finish_reason=%s, "
+                    "reasoning_content长度=%d, 完整message keys=%s",
+                    finish_reason,
+                    len(reasoning) if isinstance(reasoning, str) else 0,
+                    list(message.keys()),
+                )
+                # 如果有 reasoning 但没有 content，尝试使用 reasoning 的最后部分
+                if reasoning and isinstance(reasoning, str) and len(reasoning) > 10:
+                    # 取 reasoning 最后 500 字符作为降级回复
+                    content = reasoning[-500:] if len(reasoning) > 500 else reasoning
+                    logger.info("使用 reasoning_content 作为降级回复（长度=%d）", len(content))
+                else:
+                    raise ValueError(
+                        f"content 为空且无有效 reasoning_content。"
+                        f"finish_reason={finish_reason}, message_keys={list(message.keys())}"
+                    )
+
             if not isinstance(content, str):
                 raise ValueError(f"content 不是字符串类型：{type(content).__name__}")
-            return content.strip()
+
+            stripped = content.strip()
+            if not stripped:
+                logger.warning(
+                    "API 返回 content 为空白字符串。finish_reason=%s, message全部keys=%s",
+                    choices[0].get("finish_reason", "?"),
+                    list(message.keys()),
+                )
+                # 检查是否有其他字段可用
+                all_msg_str = str(message)[:200]
+                raise ValueError(f"content 为空白字符串。message 摘要: {all_msg_str}")
+
+            return stripped
+
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             logger.error("API 返回格式异常：%s", exc)
             raise ValueError(
@@ -131,23 +190,20 @@ class LLMClient:
         max_tokens: int = 2000,
     ) -> str:
         """
-        发送单次聊天补全请求到大模型 API。
+        发送单轮对话请求到大模型 API。
 
         参数:
-            messages: 消息列表，格式为：
-                [{"role": "system", "content": "..."},
-                 {"role": "user", "content": "..."}]
-            temperature: 采样温度，默认 0.7。
+            messages: 消息列表。
+            temperature: 采样温度，默认 0.7（分析类任务建议 0.3-0.5）。
             max_tokens: 最大生成 token 数，默认 2000。
 
         返回:
-            模型生成的回复文本字符串。
+            模型回复文本。
 
         异常:
             ValueError: 参数非法或返回格式异常。
             requests.exceptions.Timeout: 请求超时。
-            requests.exceptions.HTTPError: HTTP 状态码异常（含鉴权失败）。
-            requests.exceptions.RequestException: 其他网络错误。
+            requests.exceptions.HTTPError: HTTP 状态码异常。
         """
         if not isinstance(messages, list) or len(messages) == 0:
             raise ValueError("messages 参数必须为非空列表。")

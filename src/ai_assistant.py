@@ -186,15 +186,32 @@ class AIAssistant:
 
         # 解析响应
         parsed = parse_response(raw_response)
-        conclusion = parsed.get("conclusion", raw_response)
+        conclusion = parsed.get("conclusion")
         analysis_type = parsed.get("analysis_type")
 
-        # 解析失败：直接展示原始回复，不触发分析
-        if not conclusion or analysis_type is None and not raw_response.strip():
-            logger.warning("大模型返回为空，降级处理。")
+        # 诊断日志：记录解析结果
+        logger.info(
+            "LLM 原始回复长度=%d, 解析后 conclusion长度=%d, analysis_type=%s",
+            len(raw_response) if raw_response else 0,
+            len(conclusion) if conclusion else 0,
+            analysis_type,
+        )
+
+        # 解析完全失败（无结论、无原始文本）
+        if (not conclusion or not conclusion.strip()) and (not raw_response or not raw_response.strip()):
+            logger.warning("大模型返回完全为空，降级处理。")
             return self._fallback_response(question, reason="大模型返回为空")
 
-        # 解析失败但有大模型文本：展示原文，不触发图表
+        # 有原始文本但解析出的结论为空：用原始文本作为结论
+        if not conclusion or not conclusion.strip():
+            logger.warning("解析结论为空，使用原始 LLM 回复。原始回复前200字: %s", (raw_response or "")[:200])
+            conclusion = raw_response
+            # 强制设一个合理的 analysis_type
+            if not analysis_type:
+                analysis_type = self._guess_analysis_type(question)
+                logger.info("基于关键词猜测 analysis_type=%s", analysis_type)
+
+        # 解析成功但无 analysis_type：直接展示原文，不触发图表
         if analysis_type is None:
             logger.info("未解析出 analysis_type，直接展示大模型回复。")
             self._context.add_message("user", question)
