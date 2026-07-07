@@ -384,12 +384,9 @@ class AIAssistant:
         if not any(kw in q_lower for kw in recommend_keywords):
             return ""
 
-        # 构建搜索查询：结合内容领域
         search_query = f"自媒体内容创作趋势 2026 热门选题方向"
-        logger.info("触发联网搜索：%s", search_query)
 
         try:
-            # 使用 DuckDuckGo 瞬时搜索（无需 API Key）
             resp = requests.get(
                 "https://api.duckduckgo.com/",
                 params={
@@ -403,11 +400,9 @@ class AIAssistant:
             if resp.status_code == 200:
                 data = resp.json()
                 snippets = []
-                # 提取 Abstract
                 abstract = data.get("AbstractText", "")
                 if abstract:
                     snippets.append(abstract)
-                # 提取 RelatedTopics
                 for topic in data.get("RelatedTopics", [])[:5]:
                     text = topic.get("Text", "")
                     if text:
@@ -416,10 +411,10 @@ class AIAssistant:
                     result = "以下是最新的自媒体创作趋势信息：\n" + "\n".join(
                         f"- {s}" for s in snippets[:8]
                     )
-                    logger.info("联网搜索成功，获取 %d 条结果", len(snippets))
+                    logger.debug("联网搜索成功，获取 %d 条结果", len(snippets))
                     return result
-        except Exception as exc:
-            logger.warning("联网搜索失败（不影响主流程）：%s", exc)
+        except Exception:
+            pass
 
         return ""
 

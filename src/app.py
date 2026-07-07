@@ -196,7 +196,7 @@ def _render_sidebar() -> None:
             preview_count = min(10, len(df))
             st.dataframe(
                 df.head(preview_count),
-                use_container_width=True,
+                width='stretch',
                 height=300,
             )
 
@@ -350,10 +350,10 @@ def _render_chart(result: Dict[str, Any]) -> None:
     # 判断是 matplotlib 还是 plotly
     if hasattr(chart, "update_layout") and hasattr(chart, "write_image"):
         # plotly Figure
-        st.plotly_chart(chart, use_container_width=True)
+        st.plotly_chart(chart, width='stretch')
     elif hasattr(chart, "savefig"):
         # matplotlib Figure
-        st.pyplot(chart, use_container_width=True)
+        st.pyplot(chart, width='stretch')
     else:
         logger.warning("未知图表类型：%s", type(chart).__name__)
 
