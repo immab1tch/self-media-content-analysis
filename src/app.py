@@ -335,13 +335,14 @@ def _render_conclusion(result: Dict[str, Any]) -> None:
     参数:
         result: AI 助手返回的结果字典。
     """
-    conclusion = result.get("conclusion", "")
+    conclusion = result.get("content", "") or result.get("conclusion", "")
     analysis_type = result.get("analysis_type")
 
     if not conclusion:
         return
 
-    # 分析类型标签（小巧不抢眼）
+    st.success(f"🤖 **AI 智能分析**\n\n{conclusion}")
+
     if analysis_type:
         type_names = {
             "describe": "📋 数据概览",
@@ -355,8 +356,6 @@ def _render_conclusion(result: Dict[str, Any]) -> None:
         }
         type_name = type_names.get(analysis_type, analysis_type)
         st.caption(type_name)
-
-    st.markdown(conclusion)
 
 
 def _render_chart(result: Dict[str, Any]) -> None:
