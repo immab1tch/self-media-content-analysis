@@ -83,13 +83,13 @@ class TestLoadDataSuccess:
         assert len(df.columns) == 9
 
     def test_load_csv_columns(self, sample_csv_path):
-        """CSV 列名应与预期一致。"""
+        """CSV 列名应与预期一致（视频类型+内容分类模型）。"""
         df = load_data(sample_csv_path)
         expected_cols = {
-            "发布日期", "内容标题", "内容类型", "播放量",
-            "点赞数", "评论数", "转发数", "收藏数", "粉丝增量",
+            "发布日期", "内容标题", "视频类型", "内容分类",
+            "播放量", "点赞数", "评论数", "转发数", "收藏数",
         }
-        assert expected_cols.issubset(set(df.columns))
+        assert expected_cols == set(df.columns)
 
     def test_load_xlsx_returns_dataframe(self, sample_xlsx_path):
         """Excel 加载应返回 DataFrame。"""
