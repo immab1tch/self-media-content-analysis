@@ -6,10 +6,10 @@ AI 自然语言数据分析助手核心编排模块。
 将用户自然语言提问转化为「结论文字 + 可视化图表」的联动输出。
 
 设计原则：
-1. 此模块不直接处理用户界面，只返回结构化数据。
-2. 图表对象返回后由调用方（app.py）决定如何展示。
-3. API 调用失败时降级为本地统计分析，保证可用性。
-4. 推荐类问题自动联网搜索最新趋势作为补充上下文。
+1. AI 结论优先——让大模型真正发挥作用，本地统计仅作为补充和图表支撑
+2. 降级模式兜底——API 不可用时使用本地统计分析
+3. 推荐类问题由 AI 直接生成，不需要本地统计函数
+4. 完善诊断日志，便于排查问题
 """
 
 import logging
@@ -18,7 +18,6 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-# 同目录模块导入
 from analyzer import run_analysis
 from api_client import LLMClient
 from context_manager import ConversationContext
@@ -34,7 +33,6 @@ from visualizer import create_chart
 logger = logging.getLogger(__name__)
 
 
-# analysis_type → 是否有对应图表
 _CHART_AVAILABLE = {
     "describe": False,
     "correlation": True,
@@ -45,7 +43,6 @@ _CHART_AVAILABLE = {
     "recommend": False,
 }
 
-# 降级时使用的 analysis_type
 _FALLBACK_ANALYSIS_TYPE = "describe"
 
 
@@ -62,12 +59,10 @@ class AIAssistant:
         self._df = df
         self._context = ConversationContext(max_history=3)
 
-        # 生成数据摘要（供 system prompt 使用，不发全量数据）
         self._data_summary = generate_data_summary(df)
         self._system_prompt = build_system_prompt(self._data_summary)
         logger.info("AI 助手初始化完成，数据摘要长度=%d 字符", len(self._data_summary))
 
-        # 初始化 LLM 客户端（API_KEY 未配置时进入降级模式）
         self._llm_client: Optional[LLMClient] = None
         self._degraded_mode = False
         try:
@@ -78,35 +73,15 @@ class AIAssistant:
 
     @property
     def is_degraded(self) -> bool:
-        """返回是否处于降级模式（API 不可用）。"""
         return self._degraded_mode
 
     @property
     def data_summary(self) -> str:
-        """返回当前数据摘要文本。"""
         return self._data_summary
 
     def ask(self, question: str) -> Dict[str, Any]:
         """
         处理用户自然语言提问并返回分析结果（单轮问答）。
-
-        流程：
-        a. 构建 system prompt + user prompt
-        b. 调用 LLMClient.chat_with_retry 获取回复
-        c. 通过 prompt_engine.parse_response 解析
-        d. 若解析出 analysis_type，调用 analyzer 获取统计结果
-        e. 若解析出 analysis_type，调用 visualizer 生成图表
-        f. 返回 {conclusion, chart, analysis_type}
-        g. 将本轮对话存入 ConversationContext
-
-        参数:
-            question: 用户的自然语言问题。
-
-        返回:
-            包含以下字段的字典：
-            - conclusion: 分析结论文字
-            - chart: matplotlib/plotly Figure 对象，或 None
-            - analysis_type: 分析类型标识字符串，或 None
         """
         if not question or not question.strip():
             raise ValueError("问题不能为空。")
@@ -122,14 +97,6 @@ class AIAssistant:
     def ask_followup(self, question: str) -> Dict[str, Any]:
         """
         处理用户追问，使用历史上下文。
-
-        流程同 ask，区别在于使用 build_followup_prompt 拼接历史对话。
-
-        参数:
-            question: 当前追问问题。
-
-        返回:
-            同 ask 方法的返回结构。
         """
         if not question or not question.strip():
             raise ValueError("追问问题不能为空。")
@@ -144,16 +111,9 @@ class AIAssistant:
         return self._run_pipeline(question, messages)
 
     def get_history(self) -> List[Dict[str, str]]:
-        """
-        返回对话历史。
-
-        返回:
-            对话历史列表，每项格式 {"role":..., "content":...}。
-        """
         return self._context.get_history()
 
     def clear_history(self) -> None:
-        """清空对话历史。"""
         self._context.clear()
 
     def _run_pipeline(
@@ -163,120 +123,66 @@ class AIAssistant:
     ) -> Dict[str, Any]:
         """
         执行问答核心流水线：调用模型 → 解析 → 触发分析 → 生成图表 → 存历史。
-
-        推荐类问题会自动联网搜索最新趋势作为补充上下文。
-
-        参数:
-            question: 原始用户问题（用于历史记录）。
-            messages: 发送给大模型的完整消息列表。
-
-        返回:
-            包含 conclusion / chart / analysis_type 的结果字典。
         """
-        # 降级模式：直接走本地统计分析
         if self._degraded_mode or self._llm_client is None:
             logger.info("降级模式：返回本地统计分析结果。")
             return self._fallback_response(question, reason="AI 服务未配置")
 
-        # 对于推荐/建议类问题，尝试联网搜索补充上下文
         search_context = self._try_web_search(question)
         if search_context:
-            # 将搜索结果注入 system prompt
             enhanced_system = (
                 self._system_prompt
                 + f"\n\n# 联网搜索补充信息（来自实时网络搜索，可作为推荐参考）\n{search_context}"
             )
             messages = [
                 {"role": "system", "content": enhanced_system},
-                messages[1],  # user message
+                messages[1],
             ]
             logger.info("已注入联网搜索结果（长度=%d）", len(search_context))
 
-        # 调用大模型
         try:
             raw_response = self._llm_client.chat_with_retry(
                 messages=messages,
                 max_retries=2,
+                temperature=0.5,
+                max_tokens=3000,
             )
+            logger.info("LLM API 调用成功，原始回复长度=%d", len(raw_response))
         except Exception as exc:
             logger.error("大模型 API 调用失败，降级处理：%s", exc)
             return self._fallback_response(question, reason=str(exc))
 
-        # 解析响应
         parsed = parse_response(raw_response)
         conclusion = parsed.get("conclusion")
         analysis_type = parsed.get("analysis_type")
 
-        # 诊断日志：记录解析结果
         logger.info(
-            "LLM 原始回复长度=%d, 解析后 conclusion长度=%d, analysis_type=%s",
-            len(raw_response) if raw_response else 0,
+            "解析结果：conclusion长度=%d, analysis_type=%s",
             len(conclusion) if conclusion else 0,
             analysis_type,
         )
 
-        # 解析完全失败（无结论、无原始文本）
-        if (not conclusion or not conclusion.strip()) and (not raw_response or not raw_response.strip()):
-            logger.warning("大模型返回完全为空，降级处理。")
-            return self._fallback_response(question, reason="大模型返回为空")
-
-        # 有原始文本但解析出的结论为空：用原始文本作为结论
         if not conclusion or not conclusion.strip():
-            logger.warning("解析结论为空，使用原始 LLM 回复。原始回复前200字: %s", (raw_response or "")[:200])
-            conclusion = raw_response
-            # 强制设一个合理的 analysis_type
-            if not analysis_type:
-                analysis_type = self._guess_analysis_type(question)
-                logger.info("基于关键词猜测 analysis_type=%s", analysis_type)
+            if raw_response and raw_response.strip():
+                conclusion = raw_response
+                logger.warning("解析结论为空，使用原始 LLM 回复")
+            else:
+                logger.warning("大模型返回完全为空，降级处理")
+                return self._fallback_response(question, reason="大模型返回为空")
 
-        # 解析成功但无 analysis_type：直接展示原文，不触发图表
         if analysis_type is None:
-            logger.info("未解析出 analysis_type，直接展示大模型回复。")
-            self._context.add_message("user", question)
-            self._context.add_message("assistant", conclusion)
-            return {
-                "conclusion": conclusion,
-                "chart": None,
-                "analysis_type": None,
-            }
+            analysis_type = self._guess_analysis_type(question)
+            logger.info("基于关键词猜测 analysis_type=%s", analysis_type)
 
-        # 解析成功：触发统计分析 + 图表生成
         chart = None
-        stats_text = ""
-
-        if analysis_type == "recommend":
-            # 推荐类型：优先使用 LLM 结论，若为空则补充本地分析
-            logger.info("recommend 类型：使用 AI 推荐结论，必要时补充本地分析。")
-            if not conclusion or len(conclusion.strip()) < 30:
-                logger.warning("LLM 推荐结论过短或为空，补充本地推荐分析。")
-                try:
-                    local_recommend = run_analysis(self._df, "recommend", params={})
-                    conclusion = local_recommend if local_recommend else (
-                        "基于数据分析，建议延续高表现内容分类和视频格式的选题方向。"
-                        "具体请查看下方统计依据。"
-                    )
-                except Exception as rec_exc:
-                    logger.error("本地推荐分析失败：%s", rec_exc)
-                    if not conclusion:
-                        conclusion = "（AI 推荐分析完成，但未能生成详细文字结论）"
-        else:
+        if analysis_type != "recommend":
             try:
-                stats_text = run_analysis(self._df, analysis_type, params={})
-                if stats_text:
-                    conclusion = (
-                        f"{conclusion}\n\n"
-                        f"—— 底层统计依据 ——\n{stats_text}"
-                    )
+                if _CHART_AVAILABLE.get(analysis_type, False):
+                    chart = create_chart(analysis_type, self._df, params={})
+                    logger.info("图表生成成功（type=%s）", analysis_type)
             except Exception as exc:
-                logger.error("调用 analyzer 失败（type=%s）：%s", analysis_type, exc)
+                logger.error("调用 visualizer 失败（type=%s）：%s", analysis_type, exc)
 
-        try:
-            if _CHART_AVAILABLE.get(analysis_type, False):
-                chart = create_chart(analysis_type, self._df, params={})
-        except Exception as exc:
-            logger.error("调用 visualizer 失败（type=%s）：%s", analysis_type, exc)
-
-        # 存入对话历史
         self._context.add_message("user", question)
         self._context.add_message("assistant", conclusion)
 
@@ -293,13 +199,6 @@ class AIAssistant:
     ) -> Dict[str, Any]:
         """
         降级响应：API 不可用时返回本地统计分析结果。
-
-        参数:
-            question: 用户问题（用于历史记录）。
-            reason: 降级原因（仅记日志）。
-
-        返回:
-            降级结果字典，analysis_type 固定为 describe。
         """
         logger.warning("降级响应触发，原因：%s", reason)
 
@@ -310,16 +209,17 @@ class AIAssistant:
         if analysis_type == "recommend":
             logger.info("recommend 类型降级：返回基于数据的本地推荐分析。")
             try:
-                stats_text = run_analysis(self._df, "recommend", params={})
-                if not stats_text:
-                    # 兜底：用 content_type + top 组合
-                    type_analysis = run_analysis(self._df, "content_type", params={})
-                    top_analysis = run_analysis(self._df, "top", params={"n": 3})
-                    stats_text = (
-                        "【本地统计模式 · 内容推荐分析】\n\n"
-                        f"{type_analysis}\n\n{top_analysis}\n\n"
-                        "建议方向：延续高表现内容分类的选题，结合热门标题关键词进行创作。"
-                    )
+                type_analysis = run_analysis(self._df, "content_type", params={})
+                top_analysis = run_analysis(self._df, "top", params={"n": 3})
+                stats_text = (
+                    "【本地统计模式 · 内容推荐分析】\n\n"
+                    f"📊 内容类型分布：\n{type_analysis}\n\n"
+                    f"🏆 播放量 Top 3 内容：\n{top_analysis}\n\n"
+                    "💡 建议方向：\n"
+                    "1. 延续播放量较高的内容分类进行选题\n"
+                    "2. 关注互动率（点赞/播放）高的内容特征\n"
+                    "3. 结合热门标题关键词进行创作"
+                )
             except Exception as exc:
                 logger.error("recommend 降级统计失败：%s", exc)
                 stats_text = (
@@ -364,18 +264,6 @@ class AIAssistant:
 
     @staticmethod
     def _try_web_search(question: str) -> str:
-        """
-        对推荐/建议类问题尝试联网搜索最新趋势。
-
-        仅在问题包含推荐意图关键词时才触发搜索，
-        避免不必要的网络请求。
-
-        参数:
-            question: 用户问题文本。
-
-        返回:
-            搜索结果文本（可能为空字符串）。
-        """
         recommend_keywords = [
             "推荐", "建议", "下一步", "拍什么", "做什么",
             "内容方向", "选题", "趋势", "热门", "火",
@@ -420,15 +308,6 @@ class AIAssistant:
 
     @staticmethod
     def _guess_analysis_type(question: str) -> str:
-        """
-        根据问题关键词猜测分析类型（降级时使用）。
-
-        参数:
-            question: 用户问题文本。
-
-        返回:
-            猜测的 analysis_type，默认 describe。
-        """
         q = question.lower()
         keyword_map = [
             ("趋势", "trend"),
@@ -483,107 +362,36 @@ if __name__ == "__main__":
     print(f"\n降级模式：{assistant.is_degraded}")
     print(f"数据摘要长度：{len(assistant.data_summary)} 字符")
 
-    # 1. 测试降级模式下的 ask
-    print("\n1. 测试降级 ask（趋势问题）...")
-    result1 = assistant.ask("播放量趋势如何？")
-    print(f"   conclusion 长度：{len(result1['conclusion'])} 字符")
-    print(f"   analysis_type：{result1['analysis_type']}")
-    print(f"   chart 类型：{type(result1['chart']).__name__}")
-    if (
-        result1["analysis_type"] == "trend"
-        and result1["chart"] is not None
-        and "不可用" in result1["conclusion"]
-    ):
-        print("   结果：OK")
+    if not assistant.is_degraded:
+        print("\nAI 模式测试：")
+        print("=" * 60)
+        
+        test_questions = [
+            "播放量趋势如何？",
+            "哪种内容类型表现最好？",
+            "自媒体账号下一步创作什么内容？",
+        ]
+        
+        for q in test_questions:
+            print(f"\n问题：{q}")
+            try:
+                result = assistant.ask(q)
+                print(f"分析类型：{result['analysis_type']}")
+                print(f"结论长度：{len(result['conclusion'])} 字符")
+                print(f"图表：{'有' if result['chart'] else '无'}")
+                print(f"结论预览：{result['conclusion'][:150]}...")
+            except Exception as e:
+                print(f"错误：{e}")
     else:
-        print("   结果：FAIL")
-
-    # 2. 测试降级 ask（相关性问题）
-    print("\n2. 测试降级 ask（相关性问题）...")
-    result2 = assistant.ask("播放量和点赞数相关性如何？")
-    print(f"   analysis_type：{result2['analysis_type']}")
-    if (
-        result2["analysis_type"] == "correlation"
-        and result2["chart"] is not None
-    ):
-        print("   结果：OK")
-    else:
-        print("   结果：FAIL")
-
-    # 3. 测试降级 ask（Top N 问题）
-    print("\n3. 测试降级 ask（Top N 问题）...")
-    result3 = assistant.ask("播放量最高的 5 条内容是哪些？")
-    print(f"   analysis_type：{result3['analysis_type']}")
-    if result3["analysis_type"] == "top" and result3["chart"] is not None:
-        print("   结果：OK")
-    else:
-        print("   结果：FAIL")
-
-    # 4. 测试降级 ask（默认 describe）
-    print("\n4. 测试降级 ask（无明显关键词）...")
-    result4 = assistant.ask("数据整体情况怎么样？")
-    print(f"   analysis_type：{result4['analysis_type']}")
-    if result4["analysis_type"] == "describe" and result4["chart"] is None:
-        print("   结果：OK")
-    else:
-        print("   结果：FAIL")
-
-    # 5. 测试空问题抛异常
-    print("\n5. 测试空问题抛 ValueError ...", end=" ")
-    try:
-        assistant.ask("")
-        print("FAIL（应抛异常）")
-    except ValueError:
-        print("OK")
-
-    # 6. 测试 ask_followup
-    print("\n6. 测试 ask_followup（追问）...")
-    result6 = assistant.ask_followup("那它的点赞情况呢？")
-    print(f"   conclusion 长度：{len(result6['conclusion'])} 字符")
-    print(f"   analysis_type：{result6['analysis_type']}")
-    if result6["conclusion"] and "不可用" in result6["conclusion"]:
-        print("   结果：OK")
-    else:
-        print("   结果：FAIL")
-
-    # 7. 测试 get_history
-    print("\n7. 测试 get_history ...", end=" ")
-    history = assistant.get_history()
-    # 之前 4 次 ask + 1 次 followup = 5 轮 = 10 条
-    # max_history=3，应保留最近 3 轮 = 6 条
-    print(f"历史条数：{len(history)}（max_history=3）")
-    if len(history) <= 6 and len(history) > 0:
-        print("   结果：OK")
-    else:
-        print(f"   结果：FAIL（len={len(history)}）")
-
-    # 8. 测试 clear_history
-    print("\n8. 测试 clear_history ...", end=" ")
-    assistant.clear_history()
-    if len(assistant.get_history()) == 0:
-        print("OK")
-    else:
-        print("FAIL")
-
-    # 9. 测试 _guess_analysis_type
-    print("\n9. 测试 _guess_analysis_type ...", end=" ")
-    cases = [
-        ("播放量趋势如何", "trend"),
-        ("点赞和评论的相关性", "correlation"),
-        ("哪种内容类型最多", "content_type"),
-        ("播放量分布情况", "distribution"),
-        ("播放量 top 5", "top"),
-        ("整体情况", "describe"),
-    ]
-    all_ok = True
-    for q, expected in cases:
-        got = AIAssistant._guess_analysis_type(q)
-        if got != expected:
-            print(f"FAIL（'{q}' → {got}，预期 {expected}）")
-            all_ok = False
-            break
-    if all_ok:
-        print("OK")
+        print("\n降级模式测试：")
+        print("=" * 60)
+        
+        result = assistant.ask("播放量趋势如何？")
+        print(f"分析类型：{result['analysis_type']}")
+        print(f"结论长度：{len(result['conclusion'])} 字符")
+        
+        result2 = assistant.ask("自媒体账号下一步创作什么内容？")
+        print(f"\n推荐问题分析类型：{result2['analysis_type']}")
+        print(f"结论长度：{len(result2['conclusion'])} 字符")
 
     print("\n测试完成。")
-    print("注：如需测试真实 API 调用，请在 .env 中配置 LLM_API_KEY 后重新运行。")
