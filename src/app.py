@@ -216,11 +216,11 @@ def _render_sidebar() -> None:
             df = st.session_state.df_processed
             st.write(f"共 **{len(df)}** 条记录，**{len(df.columns)}** 个字段")
 
-            preview_count = min(10, len(df))
+            preview_count = min(20, len(df))
             st.dataframe(
                 df.head(preview_count),
                 width='stretch',
-                height=300,
+                height=400,
             )
 
             with st.expander("📊 数据摘要"):
