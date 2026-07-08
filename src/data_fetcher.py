@@ -6,23 +6,33 @@
 返回与本地CSV格式一致的标准化DataFrame。
 
 当前支持平台：
-- B站（模拟数据模式，预留API接口）
+- B站（哔哩哔哩）- 支持真实API和模拟数据模式
 
 设计原则：
 1. 返回数据结构与 data/sample/sample_content.csv 保持一致
 2. 自动处理分页、字段映射、数据类型转换
 3. 提供统一入口 fetch_data(platform, account_id)
-4. API调用失败时给出中文友好错误提示
+4. API调用失败时给出中文友好错误提示，自动降级到模拟数据
 
-注意：由于B站API存在安全风控拦截，当前使用模拟数据模式。
-如需接入真实API，需配置有效的认证信息。
+API配置：
+在 .env 文件中配置以下环境变量以启用真实API：
+- BILIBILI_SESSDATA: 从B站Cookie获取
+- BILIBILI_BILI_JCT: 从B站Cookie获取
+
+WBI签名说明：
+B站新版API使用WBI签名机制，需要动态获取img_key和sub_key，
+然后对请求参数进行签名计算。
 """
 
+import hashlib
+import json
 import logging
 import random
+import urllib.parse
 from typing import Optional
 
 import pandas as pd
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +41,85 @@ SUPPORTED_PLATFORMS = {"B站 (哔哩哔哩)": "bilibili"}
 
 # 反向映射：内部标识 → 显示名
 _PLATFORM_DISPLAY_NAMES = {v: k for k, v in SUPPORTED_PLATFORMS.items()}
+
+# B站API基础URL
+_BILI_BASE_URL = "https://api.bilibili.com"
+
+# WBI签名相关常量
+_WBI_KEY_TABLE = [
+    46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
+    33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40,
+    61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11,
+    36, 20, 34, 44, 52,
+]
+
+
+def _get_wbi_keys(session: requests.Session) -> tuple:
+    """
+    获取WBI签名所需的img_key和sub_key。
+
+    从B站首页获取这两个key，用于后续API请求签名。
+
+    参数:
+        session: requests.Session对象，可携带Cookie。
+
+    返回:
+        (img_key, sub_key) 元组，或 (None, None) 表示获取失败。
+    """
+    try:
+        resp = session.get("https://www.bilibili.com/", timeout=10)
+        if resp.status_code != 200:
+            logger.warning("获取WBI key失败，HTTP状态码: %d", resp.status_code)
+            return None, None
+
+        import re
+        match = re.search(r'"wbi_img":\s*{"img_url":"([^"]+)","sub_url":"([^"]+)"', resp.text)
+        if not match:
+            logger.warning("未找到WBI key")
+            return None, None
+
+        img_url = match.group(1)
+        sub_url = match.group(2)
+
+        img_key = img_url.split("/")[-1].split(".")[0]
+        sub_key = sub_url.split("/")[-1].split(".")[0]
+
+        return img_key, sub_key
+    except Exception as exc:
+        logger.warning("获取WBI key异常: %s", exc)
+        return None, None
+
+
+def _wbi_sign(params: dict, img_key: str, sub_key: str) -> dict:
+    """
+    对请求参数进行WBI签名。
+
+    参数:
+        params: 原始请求参数字典。
+        img_key: WBI图片key。
+        sub_key: WBI子key。
+
+    返回:
+        带有w_rid和wts签名的参数字典。
+    """
+    mix_key = img_key + sub_key
+    # 按顺序从key_table中取字符
+    new_key = "".join([mix_key[i] for i in _WBI_KEY_TABLE if i < len(mix_key)])
+    new_key = new_key[:32]
+
+    # 添加时间戳
+    import time
+    params["wts"] = int(time.time())
+
+    # 对参数排序并拼接
+    params_list = sorted(params.items())
+    query_string = urllib.parse.urlencode(params_list)
+
+    # 计算签名
+    w_rid = hashlib.md5((query_string + new_key).encode("utf-8")).hexdigest()
+    params["w_rid"] = w_rid
+
+    return params
 
 
 def _generate_simulation_data(uid: str, max_videos: int = 50) -> pd.DataFrame:
@@ -99,12 +188,117 @@ def _generate_simulation_data(uid: str, max_videos: int = 50) -> pd.DataFrame:
     return df
 
 
+def _fetch_bilibili_real(uid: str, max_videos: int = 50) -> pd.DataFrame:
+    """
+    使用真实B站API获取UP主视频数据。
+
+    参数:
+        uid: B站用户UID（数字ID）。
+        max_videos: 最大获取视频数，默认50。
+
+    返回:
+        标准化的视频数据DataFrame。
+
+    异常:
+        Exception: API调用失败时抛出。
+    """
+    import os
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
+    sessdata = os.environ.get("BILIBILI_SESSDATA", "").strip()
+    bili_jct = os.environ.get("BILIBILI_BILI_JCT", "").strip()
+
+    if not sessdata or not bili_jct:
+        raise ValueError("未配置B站API认证信息，请在.env中配置BILIBILI_SESSDATA和BILIBILI_BILI_JCT")
+
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://www.bilibili.com/",
+    })
+    session.cookies.set("SESSDATA", sessdata)
+    session.cookies.set("bili_jct", bili_jct)
+
+    img_key, sub_key = _get_wbi_keys(session)
+    if not img_key or not sub_key:
+        raise ValueError("获取WBI签名key失败")
+
+    all_videos = []
+    page = 1
+    page_size = 30
+
+    while len(all_videos) < max_videos:
+        params = {
+            "mid": uid,
+            "ps": page_size,
+            "pn": page,
+            "order": "pubdate",
+            "jsonp": "jsonp",
+        }
+        params = _wbi_sign(params, img_key, sub_key)
+
+        url = f"{_BILI_BASE_URL}/x/space/wbi/arc/search"
+        resp = session.get(url, params=params, timeout=10)
+
+        if resp.status_code != 200:
+            raise ValueError(f"B站API请求失败，HTTP状态码: {resp.status_code}")
+
+        data = resp.json()
+        if data.get("code") != 0:
+            raise ValueError(f"B站API返回错误: {data.get('message', '未知错误')}")
+
+        items = data.get("data", {}).get("list", {}).get("vlist", [])
+        if not items:
+            break
+
+        for item in items:
+            if len(all_videos) >= max_videos:
+                break
+
+            video_type = "长视频"
+            if item.get("videos", 1) == 1:
+                duration = item.get("duration", 0)
+                if duration < 60:
+                    video_type = "短视频"
+
+            category = item.get("typeid", "")
+            if isinstance(category, int):
+                category = str(category)
+
+            video_info = {
+                "发布日期": pd.Timestamp(item.get("created", 0), unit="s"),
+                "内容标题": item.get("title", ""),
+                "视频类型": video_type,
+                "内容分类": item.get("typename", category) or "其他",
+                "播放量": item.get("play", 0),
+                "点赞数": item.get("video_review", 0),
+                "评论数": item.get("comment", 0),
+                "转发数": item.get("share", 0),
+                "收藏数": item.get("favorites", 0),
+            }
+            all_videos.append(video_info)
+
+        page += 1
+        if len(items) < page_size:
+            break
+
+    if not all_videos:
+        raise ValueError("未获取到视频数据")
+
+    df = pd.DataFrame(all_videos)
+    df = df.sort_values("发布日期", ascending=False).reset_index(drop=True)
+
+    logger.info("通过真实API获取B站账号 %s 的 %d 条视频数据", uid, len(df))
+    return df
+
+
 def _fetch_bilibili_videos(uid: str, max_videos: int = 50) -> pd.DataFrame:
     """
     获取B站UP主视频数据。
 
-    当前由于B站API安全风控限制，返回模拟数据。
-    预留真实API接入接口，配置认证信息后可切换。
+    优先尝试真实API，失败后自动降级到模拟数据模式。
 
     参数:
         uid: B站用户UID（数字ID）。
@@ -122,9 +316,14 @@ def _fetch_bilibili_videos(uid: str, max_videos: int = 50) -> pd.DataFrame:
     uid = uid.strip()
 
     try:
+        return _fetch_bilibili_real(uid, max_videos)
+    except ValueError as exc:
+        logger.warning("真实API调用失败: %s", exc)
+        logger.info("切换到模拟数据模式")
         return _generate_simulation_data(uid, max_videos)
     except Exception as exc:
-        logger.warning("真实API调用失败，切换到模拟数据模式: %s", exc)
+        logger.warning("真实API调用异常: %s", exc)
+        logger.info("切换到模拟数据模式")
         return _generate_simulation_data(uid, max_videos)
 
 
@@ -167,15 +366,28 @@ def get_platform_info(platform: str) -> dict:
     if platform_key in SUPPORTED_PLATFORMS:
         internal_id = SUPPORTED_PLATFORMS[platform_key]
         if internal_id == "bilibili":
+            import os
+            from dotenv import load_dotenv
+
+            load_dotenv()
+            sessdata_configured = bool(os.environ.get("BILIBILI_SESSDATA", "").strip())
+
             return {
                 "platform": "B站 (哔哩哔哩)",
                 "description": "获取B站UP主视频数据",
                 "account_id_format": "B站UID（数字，如 12345678）",
                 "account_id_example": "2262501",
+                "api_mode": "真实API" if sessdata_configured else "模拟数据",
                 "note": (
-                    "当前为模拟数据模式（B站API需认证信息才能调用真实接口）。"
-                    "模拟数据已包含完整的视频类型与内容分类字段，可用于演示全部功能。"
-                    "\n\n如需接入真实API，请在 .env 中配置 BILIBILI_SESSDATA。"
+                    "当前为" + ("真实API模式" if sessdata_configured else "模拟数据模式") + "。\n\n"
+                    + ("真实API已配置，将获取真实视频数据。" if sessdata_configured else "如需接入真实API，请在 .env 中配置以下变量：\n"
+                    "- BILIBILI_SESSDATA: 登录B站后从Cookie获取\n"
+                    "- BILIBILI_BILI_JCT: 登录B站后从Cookie获取\n\n"
+                    "获取方法：\n"
+                    "1. 打开B站并登录\n"
+                    "2. 按F12打开开发者工具\n"
+                    "3. 切换到Application → Cookies → https://www.bilibili.com\n"
+                    "4. 复制 SESSDATA 和 bili_jct 的值")
                 ),
             }
 
@@ -196,13 +408,13 @@ if __name__ == "__main__":
 
     print(f"\n测试B站数据获取（UID: {test_uid}）...")
     try:
-        df = fetch_data("bilibili", test_uid, max_videos=5)
+        df = fetch_data("B站 (哔哩哔哩)", test_uid, max_videos=5)
         print(f"成功获取 {len(df)} 条数据")
         print("\n数据预览：")
-        print(df[["发布日期", "内容标题", "内容类型", "播放量", "点赞数", "评论数"]].head())
+        print(df[["发布日期", "内容标题", "视频类型", "内容分类", "播放量", "点赞数", "评论数"]].head())
     except ValueError as exc:
         print(f"失败：{exc}")
 
     print("\n测试平台信息：")
-    info = get_platform_info("b站")
-    print(info)
+    info = get_platform_info("B站 (哔哩哔哩)")
+    print(json.dumps(info, ensure_ascii=False, indent=2))
