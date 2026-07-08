@@ -1,0 +1,28 @@
+﻿
+  You can now view your Streamlit app in your browser.
+
+  Local URL: http://localhost:8501
+  Network URL: http://10.244.237.60:8501
+  External URL: http://202.202.9.134:8501
+
+streamlit.exe : 2026-07-05 15:43:45.059 Please replace `use_container_width` with `width`.
+At line:15 char:4451
++ ... pgrep\bin'; & ".\.venv\Scripts\streamlit.exe" run src\app.py --server ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (2026-07-05 15:4...` with `width`.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-07-05 15:46:04.498 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-07-05 15:46:08.163 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
