@@ -37,11 +37,6 @@ ANALYSIS_CAPABILITIES: List[Dict[str, str]] = [
         "description": "趋势分析：按日期聚合（天/周/月自动选择），输出指定指标的变化趋势",
     },
     {
-        "analysis_type": "content_type",
-        "function": "content_type_analysis(df)",
-        "description": "视频类型/内容分类占比分析：统计不同视频类型或内容分类的数量与平均播放量",
-    },
-    {
         "analysis_type": "top",
         "function": "top_content_analysis(df, metric, n)",
         "description": "Top N 内容分析：按指定指标排序，输出前 N 条内容",

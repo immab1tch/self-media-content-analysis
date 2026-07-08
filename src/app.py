@@ -181,7 +181,7 @@ def _render_sidebar() -> None:
             max_videos = st.slider(
                 "获取视频数量",
                 min_value=5,
-                max_value=50,
+                max_value=20,
                 value=20,
                 step=5,
             )
@@ -297,8 +297,7 @@ def _render_chat_input() -> Optional[str]:
         "📈 分析播放量趋势",
         "🔗 各指标相关性分析",
         "🏆 播放量 Top 5 内容",
-        "📊 内容类型占比分析",
-        "💡 推荐下一步内容方向",
+        " 推荐下一步内容方向",
         "📋 数据整体描述统计",
     ]
 
@@ -480,8 +479,6 @@ def _local_statistics_answer(question: str) -> Dict[str, Any]:
         ("走势", "trend"),
         ("相关", "correlation"),
         ("关联", "correlation"),
-        ("类型", "content_type"),
-        ("占比", "content_type"),
         ("分布", "distribution"),
         ("异常", "distribution"),
         ("top", "top"),
@@ -512,20 +509,19 @@ def _local_statistics_answer(question: str) -> Dict[str, Any]:
             try:
                 stats_text = run_analysis(df, "recommend", params={})
                 if not stats_text or len(stats_text.strip()) < 20:
-                    # 兜底
-                    type_analysis = run_analysis(df, "content_type", params={})
+                    type_analysis = run_analysis(df, "describe", params={})
                     top_analysis = run_analysis(df, "top", params={"n": 3})
                     stats_text = (
                         f"【本地推荐分析】\n\n{type_analysis}\n\n{top_analysis}\n\n"
-                        "建议：延续高表现内容分类的选题方向，结合热门关键词进行创作。"
+                        "建议：延续高表现视频类型的选题方向，结合热门关键词进行创作。"
                     )
             except Exception as exc:
                 logger.error("本地 recommend 失败：%s", exc)
                 stats_text = (
                     "【本地推荐分析】\n基于已有数据的参考建议：\n"
-                    "1. 查看视频类型/内容分类占比分布\n"
+                    "1. 查看视频类型占比分布\n"
                     "2. 关注播放量 Top 内容的共同特征\n"
-                    "3. 延续高表现的内容分类进行选题"
+                    "3. 延续高表现的视频类型进行选题"
                 )
         else:
             stats_text = run_analysis(df, analysis_type, params={})
@@ -548,7 +544,6 @@ def _local_statistics_answer(question: str) -> Dict[str, Any]:
             "describe": False,
             "correlation": True,
             "trend": True,
-            "content_type": True,
             "top": True,
             "distribution": True,
             "recommend": False,
@@ -601,8 +596,7 @@ def _render_main_area() -> None:
                 "- 📈 播放量趋势如何？\n"
                 "- 🔗 播放量和点赞数的相关性怎么样？\n"
                 "- 🏆 播放量最高的 5 条内容是哪些？\n"
-                "- 📊 哪种内容分类表现最好？\n"
-                "- 💡 推荐下一步做什么内容？"
+                "-  推荐下一步做什么内容？"
             )
 
 

@@ -26,10 +26,8 @@ matplotlib.use("Agg")
 
 # 相关性分析默认指标列（粉丝增量为可选字段，不在默认分析中）
 _DEFAULT_CORR_COLS = ("播放量", "点赞数", "评论数", "转发数", "收藏数")
-# 视频格式类型列名（原"内容类型"，现语义更准确）
+# 视频格式类型列名
 _VIDEO_TYPE_COL = "视频类型"
-# 内容分类列名（新增，存主题领域如美食/旅游/科技等）
-_CONTENT_CATEGORY_COL = "内容分类"
 # 兼容旧字段名：同时支持"视频类型"和旧的"内容类型"
 _TYPE_COLS = ("视频类型", "内容类型")
 # 内容标题列名
@@ -514,7 +512,6 @@ def create_chart(
             df,
             use_plotly=params.get("use_plotly", False),
         ),
-        "content_type": lambda: plot_content_type_bar(df),
         "distribution": lambda: plot_distribution_box(
             df,
             metric=params.get("metric", "播放量"),

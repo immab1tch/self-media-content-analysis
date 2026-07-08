@@ -319,42 +319,6 @@ def trend_analysis(
     return "\n".join(lines)
 
 
-def content_type_analysis(df: pd.DataFrame) -> str:
-    """
-    视频类型占比分析（或内容分类占比）。
-
-    输出不同视频类型/内容分类的数量和平均播放量。
-
-    参数:
-        df: 数据 DataFrame。
-
-    返回:
-        视频类型分析结果文本。
-    """
-    type_col = _get_type_col(df)
-    if type_col is None:
-        # 尝试"内容分类"字段
-        category_col = "内容分类" if "内容分类" in df.columns else None
-        if category_col:
-            type_col = category_col
-        else:
-            return "[视频类型占比分析] 未找到视频类型或内容分类列。"
-
-    metric = "播放量" if "播放量" in df.columns else None
-    type_counts = df[type_col].value_counts()
-    total = int(type_counts.sum())
-
-    lines = [f"[{type_col}占比分析] 共 {total} 条内容，分布："]
-    for ctype, count in type_counts.items():
-        pct = count / total * 100 if total > 0 else 0
-        avg_play = ""
-        if metric and df[metric].dtype.kind in "biufc":
-            avg_val = float(df[df[type_col] == ctype][metric].mean())
-            avg_play = f"，平均{metric}={avg_val:.0f}"
-        lines.append(f"- {ctype}：{count} 条（{pct:.1f}%）{avg_play}")
-    return "\n".join(lines)
-
-
 def top_content_analysis(
     df: pd.DataFrame,
     metric: str = "播放量",
@@ -439,7 +403,7 @@ def recommend_content(df: pd.DataFrame) -> str:
     内容推荐分析：基于历史数据模式，生成下一批视频内容的选题建议。
 
     分析维度：
-    1. 高表现视频类型/内容分类（播放量/点赞率最高的类型）
+    1. 高表现视频类型（播放量/点赞率最高的类型）
     2. 热门标题关键词
     3. 发布时间规律
     4. 互动表现好的内容特征
@@ -452,12 +416,9 @@ def recommend_content(df: pd.DataFrame) -> str:
     """
     lines = ["[内容推荐分析] 基于历史数据的选题建议："]
 
-    # 优先使用"内容分类"（主题领域），其次用"视频类型"（格式形态）
-    category_col = "内容分类" if "内容分类" in df.columns else _get_type_col(df)
-
-    if category_col and category_col in df.columns:
-        type_group = df.groupby(category_col).agg(
-            视频数=(category_col, "count"),
+    if "视频类型" in df.columns:
+        type_group = df.groupby("视频类型").agg(
+            视频数=("视频类型", "count"),
             平均播放量=("播放量", "mean") if "播放量" in df.columns else None,
             平均点赞率=(
                 "点赞数",
@@ -465,34 +426,13 @@ def recommend_content(df: pd.DataFrame) -> str:
             ) if ("点赞数" in df.columns and "播放量" in df.columns) else None,
         ).dropna()
 
-        col_display = f"「{category_col}」"
         if "平均播放量" in type_group.columns:
             top_type_play = type_group["平均播放量"].idxmax()
             top_play_value = float(type_group.loc[top_type_play, "平均播放量"])
             lines.append(
-                f"1. 表现最佳{col_display}：{top_type_play}"
+                f"1. 表现最佳视频类型：{top_type_play}"
                 f"（平均播放量 {top_play_value:.0f}）"
             )
-
-        if "平均点赞率" in type_group.columns:
-            top_type_like = type_group["平均点赞率"].idxmax()
-            top_like_value = float(type_group.loc[top_type_like, "平均点赞率"])
-            lines.append(
-                f"2. 互动最佳{col_display}：{top_type_like}"
-                f"（平均点赞率 {top_like_value:.2f}%）"
-            )
-
-    # 也展示视频格式维度的分析（如果存在且与上面不同）
-    type_col = _get_type_col(df)
-    if type_col and type_col != category_col and type_col in df.columns:
-        format_group = df.groupby(type_col).agg(
-            数量=(type_col, "count"),
-            平均播放=("播放量", "mean") if "播放量" in df.columns else None,
-        ).dropna()
-        if "平均播放量" in format_group.columns:
-            best_format = format_group["平均播放量"].idxmax()
-            best_fmt_val = float(format_group.loc[best_format, "平均播放量"])
-            lines.append(f"3. 最佳视频格式：{best_format}（均播 {best_fmt_val:.0f}）")
 
     if "播放量" in df.columns and _TITLE_COL in df.columns:
         top_contents = df.nlargest(5, "播放量")
@@ -503,7 +443,7 @@ def recommend_content(df: pd.DataFrame) -> str:
                 if kw in title and kw not in keywords:
                     keywords.append(kw)
         if keywords:
-            lines.append(f"3. 热门标题关键词：{', '.join(keywords)}")
+            lines.append(f"2. 热门标题关键词：{', '.join(keywords)}")
 
     if "发布日期" in df.columns:
         try:
@@ -516,7 +456,7 @@ def recommend_content(df: pd.DataFrame) -> str:
                 weekday_counts = df_copy["星期"].value_counts().sort_index()
                 best_weekday = weekday_counts.idxmax()
                 best_count = int(weekday_counts[best_weekday])
-                lines.append(f"4. 发布时间建议：{weekday_map.get(best_weekday, best_weekday)}（发布 {best_count} 条，频率最高）")
+                lines.append(f"3. 发布时间建议：{weekday_map.get(best_weekday, best_weekday)}（发布 {best_count} 条，频率最高）")
         except Exception:
             pass
 
@@ -526,10 +466,10 @@ def recommend_content(df: pd.DataFrame) -> str:
             avg_play = float(high_performance["播放量"].mean())
             avg_like = float(high_performance["点赞数"].mean()) if "点赞数" in df.columns else 0
             like_rate = (avg_like / avg_play * 100) if avg_play > 0 else 0
-            lines.append(f"5. 高表现内容基准：播放量 > {int(df['播放量'].quantile(0.75))}，点赞率 {like_rate:.2f}%")
+            lines.append(f"4. 高表现内容基准：播放量 > {int(df['播放量'].quantile(0.75))}，点赞率 {like_rate:.2f}%")
 
     lines.append("\n推荐选题方向：")
-    lines.append("- 延续高表现类型的内容，结合热门关键词")
+    lines.append("- 分析高表现视频的标题特征，延续受欢迎的选题方向")
     lines.append("- 尝试在高频率发布日发布新内容")
     lines.append("- 关注互动率高的内容特征进行选题")
 
@@ -547,7 +487,7 @@ def run_analysis(
     参数:
         df: 数据 DataFrame。
         analysis_type: 分析类型标识，可选：
-            describe / correlation / trend / content_type / top / distribution
+            describe / correlation / trend / top / distribution
         params: 分析参数字典，对应各函数的 keyword 参数。
 
     返回:
@@ -566,7 +506,6 @@ def run_analysis(
             date_col=p.get("date_col", "发布日期"),
             metric=p.get("metric", "播放量"),
         ),
-        "content_type": lambda p: content_type_analysis(df),
         "top": lambda p: top_content_analysis(
             df,
             metric=p.get("metric", "播放量"),

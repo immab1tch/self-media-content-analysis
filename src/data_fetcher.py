@@ -42,37 +42,6 @@ SUPPORTED_PLATFORMS = {"B站 (哔哩哔哩)": "bilibili"}
 # 反向映射：内部标识 → 显示名
 _PLATFORM_DISPLAY_NAMES = {v: k for k, v in SUPPORTED_PLATFORMS.items()}
 
-# B站分类ID映射（按B站官方主页分类整理，合并细分类）
-_BILIBILI_CATEGORIES = {
-    1: "动画", 2: "音乐", 3: "游戏", 4: "娱乐", 5: "影视",
-    6: "科技", 7: "生活", 8: "鬼畜", 9: "时尚", 10: "其他",
-    11: "其他", 12: "其他", 13: "国创", 16: "搞笑", 17: "知识",
-    18: "数码", 19: "汽车", 20: "运动", 21: "美食", 22: "动物圈",
-    23: "舞蹈", 24: "音乐", 25: "音乐", 26: "音乐", 27: "音乐",
-    28: "音乐", 29: "音乐", 30: "游戏", 31: "游戏", 32: "游戏",
-    33: "游戏", 34: "游戏", 35: "游戏", 36: "游戏", 37: "动画",
-    38: "动画", 39: "动画", 40: "影视", 41: "生活", 42: "影视",
-    43: "影视", 44: "影视", 45: "影视", 46: "影视", 47: "资讯",
-    48: "科技", 49: "科技", 50: "数码", 51: "科技", 52: "生活",
-    53: "搞笑", 54: "动物圈", 55: "美食", 56: "生活", 57: "运动",
-    58: "时尚", 59: "时尚", 60: "生活", 61: "资讯", 62: "其他",
-    63: "其他", 64: "其他", 65: "舞蹈", 66: "舞蹈", 67: "舞蹈",
-    68: "舞蹈", 69: "舞蹈", 70: "舞蹈", 71: "舞蹈", 72: "游戏",
-    73: "游戏", 74: "游戏", 75: "游戏", 76: "游戏", 77: "游戏",
-    78: "游戏", 79: "游戏", 80: "游戏", 81: "游戏", 82: "游戏",
-    83: "游戏", 84: "游戏", 85: "游戏", 86: "游戏", 87: "游戏",
-    88: "游戏", 89: "游戏", 90: "游戏", 91: "游戏", 92: "游戏",
-    93: "游戏", 94: "游戏", 95: "游戏", 96: "游戏", 97: "游戏",
-    98: "游戏", 99: "游戏", 100: "游戏",
-}
-
-# 简化后的分类列表（用于数据分析和展示）
-_BILIBILI_SIMPLE_CATEGORIES = [
-    "动画", "音乐", "游戏", "娱乐", "影视", "科技", "生活", "鬼畜",
-    "时尚", "国创", "搞笑", "知识", "数码", "汽车", "运动", "美食",
-    "动物圈", "舞蹈", "资讯", "其他",
-]
-
 # B站API基础URL
 _BILI_BASE_URL = "https://api.bilibili.com"
 
@@ -206,7 +175,6 @@ def _generate_simulation_data(uid: str, max_videos: int = 50) -> pd.DataFrame:
 
     数据模型说明：
     - 视频类型：视频的格式形态（长视频 / 短视频 / 直播回放）
-    - 内容分类：视频的主题领域（美食 / 旅游 / 科技测评 / vlog 等）
 
     参数:
         uid: 用户ID（用于种子生成）。
@@ -250,7 +218,6 @@ def _generate_simulation_data(uid: str, max_videos: int = 50) -> pd.DataFrame:
             "发布日期": base_date + pd.Timedelta(days=days_ago),
             "内容标题": f"{category} | {template}第{i + 1}期",
             "视频类型": video_type,
-            "内容分类": category,
             "播放量": views,
             "点赞数": likes,
             "评论数": comments,
@@ -336,17 +303,13 @@ def _fetch_bilibili_real(uid: str, max_videos: int = 50) -> pd.DataFrame:
                 break
 
             video_type = "长视频"
-            if item.get("videos", 1) == 1:
-                duration = item.get("duration", 0)
-                if duration < 60:
-                    video_type = "短视频"
-
-            typeid = item.get("typeid", 0)
+            duration = item.get("duration", 0)
             try:
-                typeid_int = int(typeid)
-                category = _BILIBILI_CATEGORIES.get(typeid_int, "其他")
+                duration_int = int(duration)
+                if duration_int < 300:
+                    video_type = "短视频"
             except (ValueError, TypeError):
-                category = "其他"
+                video_type = "长视频"
 
             bvid = item.get("bvid", "")
             play = item.get("play", 0)
@@ -355,7 +318,7 @@ def _fetch_bilibili_real(uid: str, max_videos: int = 50) -> pd.DataFrame:
             share = item.get("share", 0)
             like = item.get("likes", 0)
 
-            if bvid and (like == 0 or favorites == 0 or share == 0):
+            if bvid:
                 try:
                     detail_url = f"{_BILI_BASE_URL}/x/web-interface/view"
                     detail_params = {"bvid": bvid}
@@ -364,7 +327,19 @@ def _fetch_bilibili_real(uid: str, max_videos: int = 50) -> pd.DataFrame:
                     if detail_resp.status_code == 200:
                         detail_data = detail_resp.json()
                         if detail_data.get("code") == 0:
-                            stat = detail_data.get("data", {}).get("stat", {})
+                            video_data = detail_data.get("data", {})
+                            stat = video_data.get("stat", {})
+                            
+                            detail_duration = video_data.get("duration", 0)
+                            try:
+                                detail_duration_int = int(detail_duration)
+                                if detail_duration_int < 300:
+                                    video_type = "短视频"
+                                else:
+                                    video_type = "长视频"
+                            except (ValueError, TypeError):
+                                pass
+                            
                             if like == 0:
                                 like = stat.get("like", 0)
                             if favorites == 0:
@@ -378,7 +353,6 @@ def _fetch_bilibili_real(uid: str, max_videos: int = 50) -> pd.DataFrame:
                 "发布日期": pd.Timestamp(item.get("created", 0), unit="s"),
                 "内容标题": item.get("title", ""),
                 "视频类型": video_type,
-                "内容分类": category,
                 "播放量": play,
                 "点赞数": like,
                 "评论数": comment,
@@ -445,7 +419,7 @@ def fetch_data(platform: str, account_id: str, max_videos: int = 50) -> pd.DataF
 
     返回:
         标准化的视频数据DataFrame，字段与本地CSV一致：
-        发布日期, 内容标题, 视频类型, 内容分类, 播放量, 点赞数, 评论数, 转发数, 收藏数
+        发布日期, 内容标题, 视频类型, 播放量, 点赞数, 评论数, 转发数, 收藏数
 
     异常:
         ValueError: 平台不支持或数据获取失败时抛出。
@@ -518,7 +492,7 @@ if __name__ == "__main__":
         df = fetch_data("B站 (哔哩哔哩)", test_uid, max_videos=5)
         print(f"成功获取 {len(df)} 条数据")
         print("\n数据预览：")
-        print(df[["发布日期", "内容标题", "视频类型", "内容分类", "播放量", "点赞数", "评论数"]].head())
+        print(df[["发布日期", "内容标题", "视频类型", "播放量", "点赞数", "评论数"]].head())
     except ValueError as exc:
         print(f"失败：{exc}")
 

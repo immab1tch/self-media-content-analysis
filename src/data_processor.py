@@ -237,9 +237,8 @@ def generate_data_summary(df: pd.DataFrame) -> str:
     """
     生成数据上下文摘要文本，供 AI 助手拼入 Prompt。
 
-    摘要包含：数据集概览、字段清单、核心统计指标、数据质量标注。
-    仅包含统计摘要与少量样本（每字段前 3 个示例），不包含全量原始数据，
-    以控制大模型 token 消耗。
+    摘要包含：数据集概览、字段清单、核心统计指标、按日期排列的播放量数据、Top视频详情、内容分类分布。
+    包含足够详细的数据信息，让 AI 能够进行准确分析和推荐。
 
     参数:
         df: 预处理后的 DataFrame。
@@ -250,7 +249,6 @@ def generate_data_summary(df: pd.DataFrame) -> str:
     if df is None or df.empty:
         return "【数据摘要】当前数据集为空。"
 
-    # 业务字段（排除内部缺失标记列）
     data_cols = [c for c in df.columns if not c.endswith(_MISSING_FLAG_SUFFIX)]
     numeric_cols = [
         c for c in data_cols
@@ -260,7 +258,6 @@ def generate_data_summary(df: pd.DataFrame) -> str:
 
     lines: List[str] = []
 
-    # 一、数据集概览
     lines.append("【数据集概览】")
     lines.append(f"- 行数：{len(df)}")
     lines.append(f"- 列数：{len(data_cols)}")
@@ -273,7 +270,6 @@ def generate_data_summary(df: pd.DataFrame) -> str:
             )
     lines.append("")
 
-    # 二、字段清单
     lines.append("【字段清单】")
     for idx, col in enumerate(data_cols, start=1):
         dtype = str(df[col].dtype)
@@ -285,20 +281,43 @@ def generate_data_summary(df: pd.DataFrame) -> str:
         lines.append(f"{idx}. {col}（{dtype}）示例：{sample_str}")
     lines.append("")
 
-    # 三、核心统计指标
     lines.append("【核心统计指标】")
     if numeric_cols:
         for col in numeric_cols:
             series = df[col]
             lines.append(
-                f"- {col}：均值={series.mean():.2f}，"
-                f"最大值={series.max():.2f}，最小值={series.min():.2f}"
+                f"- {col}：均值={series.mean():.0f}，"
+                f"中位数={series.median():.0f}，"
+                f"最大值={series.max():.0f}，最小值={series.min():.0f}"
             )
     else:
         lines.append("- 无数值列")
     lines.append("")
 
-    # 四、数据质量标注
+    if date_cols and "播放量" in data_cols:
+        date_col = date_cols[0]
+        df_sorted = df.sort_values(date_col).copy()
+        df_sorted[date_col] = df_sorted[date_col].dt.strftime("%Y-%m-%d")
+        lines.append("【按日期排列的播放量数据】")
+        for _, row in df_sorted.iterrows():
+            date_str = str(row[date_col])
+            views = int(row.get("播放量", 0))
+            lines.append(f"- {date_str}：{views:,}")
+        lines.append("")
+
+    if "播放量" in data_cols and "内容标题" in data_cols:
+        df_top = df.sort_values("播放量", ascending=False).head(10)
+        lines.append("【播放量 Top 10 视频详情】")
+        for idx, (_, row) in enumerate(df_top.iterrows(), start=1):
+            title = str(row.get("内容标题", ""))[:50]
+            views = int(row.get("播放量", 0))
+            likes = int(row.get("点赞数", 0))
+            comments = int(row.get("评论数", 0))
+            lines.append(
+                f"{idx}. 《{title}》 - 播放{views:,} | 点赞{likes:,} | 评论{comments:,}"
+            )
+        lines.append("")
+
     lines.append("【数据质量标注】")
     total_cells = len(df) * len(data_cols)
     missing_total = 0
@@ -320,7 +339,6 @@ def generate_data_summary(df: pd.DataFrame) -> str:
     else:
         lines.append("- 各列缺失情况：无缺失")
 
-    # 异常值检测（IQR 法）
     outlier_lines = []
     for col in numeric_cols:
         series = df[col]

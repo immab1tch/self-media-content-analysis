@@ -209,14 +209,14 @@ class AIAssistant:
         if analysis_type == "recommend":
             logger.info("recommend 类型降级：返回基于数据的本地推荐分析。")
             try:
-                type_analysis = run_analysis(self._df, "content_type", params={})
+                describe_analysis = run_analysis(self._df, "describe", params={})
                 top_analysis = run_analysis(self._df, "top", params={"n": 3})
                 stats_text = (
                     "【本地统计模式 · 内容推荐分析】\n\n"
-                    f"📊 内容类型分布：\n{type_analysis}\n\n"
+                    f"📊 数据概览：\n{describe_analysis}\n\n"
                     f"🏆 播放量 Top 3 内容：\n{top_analysis}\n\n"
                     "💡 建议方向：\n"
-                    "1. 延续播放量较高的内容分类进行选题\n"
+                    "1. 延续播放量较高的视频类型进行选题\n"
                     "2. 关注互动率（点赞/播放）高的内容特征\n"
                     "3. 结合热门标题关键词进行创作"
                 )
@@ -226,7 +226,7 @@ class AIAssistant:
                     "【本地统计模式 · 内容推荐分析】\n\n"
                     "当前无法连接 AI 服务，但基于已有数据给出参考建议：\n"
                     "1. 查看上方「视频类型占比」和「Top N 排行」图表\n"
-                    "2. 延续播放量较高的内容分类进行选题\n"
+                    "2. 延续播放量较高的视频类型进行选题\n"
                     "3. 关注互动率（点赞/播放）高的内容特征"
                 )
         else:
