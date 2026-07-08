@@ -73,6 +73,9 @@ _BILIBILI_SIMPLE_CATEGORIES = [
     "动物圈", "舞蹈", "资讯", "其他",
 ]
 
+# B站API基础URL
+_BILI_BASE_URL = "https://api.bilibili.com"
+
 # WBI签名相关常量
 _WBI_KEY_TABLE = [
     46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
