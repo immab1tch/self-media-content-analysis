@@ -58,7 +58,10 @@ def _get_wbi_keys(session: requests.Session) -> tuple:
     """
     获取WBI签名所需的img_key和sub_key。
 
-    从B站首页获取这两个key，用于后续API请求签名。
+    尝试多种方式获取：
+    1. 从B站首页HTML中提取（正则匹配）
+    2. 从nav接口获取
+    3. 从其他接口获取
 
     参数:
         session: requests.Session对象，可携带Cookie。
@@ -66,28 +69,72 @@ def _get_wbi_keys(session: requests.Session) -> tuple:
     返回:
         (img_key, sub_key) 元组，或 (None, None) 表示获取失败。
     """
+    import re
+
+    methods = [
+        ("首页HTML模式1", r'"wbi_img":\s*{"img_url":"([^"]+)","sub_url":"([^"]+)"'),
+        ("首页HTML模式2", r'wbi_img.*?img_url.*?"([^"]+)".*?sub_url.*?"([^"]+)"'),
+        ("首页HTML模式3", r'"img_url"\s*:\s*"([^"]+)".*?"sub_url"\s*:\s*"([^"]+)"'),
+        ("首页HTML模式4", r'"wbi_img"\s*:\s*\{.*?"img_url"\s*:\s*"([^"]+)".*?"sub_url"\s*:\s*"([^"]+)"'),
+    ]
+
+    html = ""
     try:
         resp = session.get("https://www.bilibili.com/", timeout=10)
-        if resp.status_code != 200:
+        if resp.status_code == 200:
+            html = resp.text
+            
+            for name, pattern in methods:
+                match = re.search(pattern, html)
+                if match:
+                    img_url = match.group(1)
+                    sub_url = match.group(2)
+                    
+                    img_key = img_url.split("/")[-1].split(".")[0]
+                    sub_key = sub_url.split("/")[-1].split(".")[0]
+                    
+                    if img_key and sub_key:
+                        logger.info("WBI key获取成功（%s）: img_key=%s, sub_key=%s", name, img_key[:8], sub_key[:8])
+                        return img_key, sub_key
+
+            logger.warning("未找到WBI key，尝试nav接口...")
+            
+            nav_resp = session.get("https://api.bilibili.com/x/web-interface/nav", timeout=10)
+            if nav_resp.status_code == 200:
+                try:
+                    nav_data = nav_resp.json()
+                    wbi_img = nav_data.get("data", {}).get("wbi_img", {})
+                    img_url = wbi_img.get("img_url")
+                    sub_url = wbi_img.get("sub_url")
+                    if img_url and sub_url:
+                        img_key = img_url.split("/")[-1].split(".")[0]
+                        sub_key = sub_url.split("/")[-1].split(".")[0]
+                        logger.info("WBI key获取成功（nav接口）: img_key=%s, sub_key=%s", img_key[:8], sub_key[:8])
+                        return img_key, sub_key
+                except Exception as e:
+                    logger.warning("解析nav接口失败: %s", e)
+
+        else:
             logger.warning("获取WBI key失败，HTTP状态码: %d", resp.status_code)
-            return None, None
 
-        import re
-        match = re.search(r'"wbi_img":\s*{"img_url":"([^"]+)","sub_url":"([^"]+)"', resp.text)
-        if not match:
-            logger.warning("未找到WBI key")
-            return None, None
-
-        img_url = match.group(1)
-        sub_url = match.group(2)
-
-        img_key = img_url.split("/")[-1].split(".")[0]
-        sub_key = sub_url.split("/")[-1].split(".")[0]
-
-        return img_key, sub_key
     except Exception as exc:
         logger.warning("获取WBI key异常: %s", exc)
-        return None, None
+
+    logger.error("所有方式获取WBI key均失败")
+    
+    if html:
+        try:
+            import os
+            debug_dir = os.path.join(os.path.dirname(__file__), "..", "logs")
+            os.makedirs(debug_dir, exist_ok=True)
+            debug_file = os.path.join(debug_dir, "bilibili_homepage.html")
+            with open(debug_file, "w", encoding="utf-8") as f:
+                f.write(html[:20000])
+            logger.info("页面内容已保存到 %s（前20000字符），可查看wbi_img的实际格式", debug_file)
+        except Exception as e:
+            logger.warning("保存调试文件失败: %s", e)
+    
+    return None, None
 
 
 def _wbi_sign(params: dict, img_key: str, sub_key: str) -> dict:
