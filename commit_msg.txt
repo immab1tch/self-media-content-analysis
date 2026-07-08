@@ -1,1 +1,0 @@
-feat: complete AI recommendation and chart visualization, fix UI rendering

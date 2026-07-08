@@ -19,14 +19,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    stream=sys.stdout,
-)
-
-logging.getLogger("streamlit").setLevel(logging.WARNING)
-
 # 将 src 目录加入 sys.path，以便同目录模块可互相导入
 _src_dir = Path(__file__).resolve().parent
 if str(_src_dir) not in sys.path:
@@ -41,10 +33,6 @@ from visualizer import create_chart
 logger = logging.getLogger(__name__)
 from pathlib import Path
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-
-logger.info("=== 自媒体账号内容数据分析系统启动 ===")
-logger.info(f"Python 版本: {sys.version}")
-logger.info(f"工作目录: {os.getcwd()}")
 
 # 页面配置（必须是首个 Streamlit 命令）
 st.set_page_config(
@@ -78,23 +66,20 @@ def _load_ai_assistant():
     if st.session_state.ai_assistant is not None:
         return
 
-    logger.info("========== 初始化 AI 助手 ==========")
-    logger.info(f"LLM_API_KEY 配置: {'已配置 (' + str(len(os.environ.get('LLM_API_KEY', ''))) + ' 字符)' if os.environ.get('LLM_API_KEY') else '未配置'}")
-    logger.info(f"LLM_API_URL 配置: {os.environ.get('LLM_API_URL', '未配置')}")
-    logger.info(f"LLM_MODEL 配置: {os.environ.get('LLM_MODEL', '未配置')}")
-
     from ai_assistant import AIAssistant
 
     try:
-        logger.info("正在创建 AIAssistant 实例...")
         st.session_state.ai_assistant = AIAssistant(st.session_state.df_processed)
-        logger.info(f"AI 助手初始化成功！降级模式: {st.session_state.ai_assistant.is_degraded}")
+        # 诊断：明确打印 AI 模式状态
         if st.session_state.ai_assistant.is_degraded:
-            logger.warning("⚠️ 降级模式：AI 服务不可用，将使用本地统计模式")
+            logger.warning(
+                "⚠️ AI 助手处于降级模式（未配置 LLM_API_KEY），"
+                "将使用本地统计分析。请在 .env 文件中配置 DeepSeek API Key。"
+            )
         else:
-            logger.info("✅ AI 模式：DeepSeek API 已连接")
+            logger.info("✅ AI 助手初始化成功，使用 DeepSeek API 智能模式")
     except Exception as exc:
-        logger.error("❌ AI 助手初始化失败：%s", exc, exc_info=True)
+        logger.error("AI 助手初始化失败：%s", exc)
         st.error(f"AI 助手初始化失败：{exc}")
         st.session_state.ai_assistant = None
 
@@ -186,7 +171,7 @@ def _render_sidebar() -> None:
                 step=5,
             )
 
-            if st.button("🚀 获取数据", use_container_width=True):
+            if st.button("🚀 获取数据", width="stretch"):
                 if not account_id or not account_id.strip():
                     st.warning("请输入账号ID")
                 else:
@@ -219,7 +204,7 @@ def _render_sidebar() -> None:
             preview_count = min(20, len(df))
             st.dataframe(
                 df.head(preview_count),
-                width='stretch',
+                use_container_width=False,
                 height=400,
             )
 
@@ -228,7 +213,7 @@ def _render_sidebar() -> None:
                     st.text(st.session_state.data_summary)
 
             st.markdown("---")
-            if st.button("🗑️ 清空聊天历史", use_container_width=True):
+            if st.button("🗑️ 清空聊天历史", width="stretch"):
                 st.session_state.chat_history = []
                 if st.session_state.ai_assistant is not None:
                     st.session_state.ai_assistant.clear_history()
@@ -241,7 +226,7 @@ def _render_sidebar() -> None:
             if sample_path.exists():
                 st.markdown("---")
                 st.caption("💡 没有数据？试试示例数据")
-                if st.button("📎 加载示例数据", use_container_width=True):
+                if st.button("📎 加载示例数据", width="stretch"):
                     try:
                         df_raw = load_data(str(sample_path))
                         df_processed = preprocess_data(df_raw)
@@ -259,9 +244,18 @@ def _render_sidebar() -> None:
         api_key = os.environ.get("LLM_API_KEY", "").strip()
         if api_key:
             model = os.environ.get("LLM_MODEL", "deepseek-v4-flash")
-            st.caption(f"🤖 AI 智能模式（{model}）")
+            st.success(f"🤖 AI 智能模式（{model}）")
         else:
-            st.caption("📊 本地统计模式（配置 API Key 可开启 AI 对话）")
+            st.error("📊 本地统计模式（未配置 API Key）")
+            st.markdown(
+                "要开启 **AI 对话功能**，请在项目根目录的 `.env` 文件中添加：\n"
+                "```\n"
+                "LLM_API_KEY=sk-你的DeepSeek密钥\n"
+                "LLM_MODEL=deepseek-v4-flash\n"
+                "```\n\n"
+                "👉 获取密钥：[platform.deepseek.com/api_keys](https://platform.deepseek.com/api_keys)",
+                unsafe_allow_html=False,
+            )
 
 
 def _render_degraded_warning() -> None:
@@ -305,7 +299,7 @@ def _render_chat_input() -> Optional[str]:
     cols = st.columns(3)
     for i, q in enumerate(quick_questions):
         with cols[i % 3]:
-            if st.button(q, use_container_width=True):
+            if st.button(q, width="stretch"):
                 selected_question = q
 
     with st.form("chat_form", clear_on_submit=True):
@@ -318,7 +312,7 @@ def _render_chat_input() -> Optional[str]:
                 disabled=disabled,
             )
         with col2:
-            submitted = st.form_submit_button("🚀 发送", use_container_width=True)
+            submitted = st.form_submit_button("🚀 发送", width="stretch")
 
     if submitted and question and question.strip():
         return question.strip()
@@ -336,6 +330,7 @@ def _render_conclusion(result: Dict[str, Any]) -> None:
     """
     conclusion = result.get("content", "") or result.get("conclusion", "")
     analysis_type = result.get("analysis_type")
+    is_fallback = result.get("is_fallback", False)
 
     if not conclusion:
         return
@@ -371,10 +366,10 @@ def _render_chart(result: Dict[str, Any]) -> None:
     # 判断是 matplotlib 还是 plotly
     if hasattr(chart, "update_layout") and hasattr(chart, "write_image"):
         # plotly Figure
-        st.plotly_chart(chart, width='stretch')
+        st.plotly_chart(chart, width="stretch")
     elif hasattr(chart, "savefig"):
         # matplotlib Figure
-        st.pyplot(chart, width='stretch')
+        st.pyplot(chart, width="stretch")
     else:
         logger.warning("未知图表类型：%s", type(chart).__name__)
 
@@ -406,9 +401,6 @@ def _process_question(question: str) -> None:
     参数:
         question: 用户问题文本。
     """
-    logger.info("\n========== 处理用户问题 ==========")
-    logger.info(f"问题: {question}")
-
     # 先添加用户消息到历史
     st.session_state.chat_history.append({
         "role": "user",
@@ -419,7 +411,6 @@ def _process_question(question: str) -> None:
     has_history = len(
         [m for m in st.session_state.chat_history if m["role"] == "assistant"]
     ) > 0
-    logger.info(f"是否追问: {has_history}")
 
     # 懒加载 AI 助手
     _load_ai_assistant()
@@ -431,30 +422,30 @@ def _process_question(question: str) -> None:
     }
 
     if st.session_state.ai_assistant is not None and not st.session_state.ai_assistant.is_degraded:
-        logger.info("模式: AI 模式")
+        # AI 模式
         try:
             if has_history:
-                logger.info("调用: ask_followup")
                 result = st.session_state.ai_assistant.ask_followup(question)
             else:
-                logger.info("调用: ask")
                 result = st.session_state.ai_assistant.ask(question)
-            logger.info(f"AI 返回结果: conclusion长度={len(result.get('conclusion',''))}, analysis_type={result.get('analysis_type')}, chart={'有' if result.get('chart') else '无'}")
+            result["is_fallback"] = False
         except Exception as exc:
-            logger.error("❌ AI 问答失败：%s", exc, exc_info=True)
+            logger.error("AI 问答失败：%s", exc)
             result["conclusion"] = f"AI 服务调用失败：{exc}"
             result["analysis_type"] = None
+            result["is_fallback"] = True
     else:
-        logger.info("模式: 降级模式（本地统计）")
+        # 降级模式：用关键词匹配走本地统计
         result = _local_statistics_answer(question)
-        logger.info(f"本地统计结果: conclusion长度={len(result.get('conclusion',''))}, analysis_type={result.get('analysis_type')}")
+        result["is_fallback"] = True
 
-    # 存储助手回复
+    # 存储助手回复（包含 is_fallback 标记用于UI展示）
     assistant_msg = {
         "role": "assistant",
         "content": result.get("conclusion", ""),
         "chart": result.get("chart"),
         "analysis_type": result.get("analysis_type"),
+        "is_fallback": result.get("is_fallback", True),
     }
     st.session_state.chat_history.append(assistant_msg)
 
@@ -509,19 +500,20 @@ def _local_statistics_answer(question: str) -> Dict[str, Any]:
             try:
                 stats_text = run_analysis(df, "recommend", params={})
                 if not stats_text or len(stats_text.strip()) < 20:
-                    type_analysis = run_analysis(df, "describe", params={})
+                    # 兜底
+                    type_analysis = run_analysis(df, "content_type", params={})
                     top_analysis = run_analysis(df, "top", params={"n": 3})
                     stats_text = (
                         f"【本地推荐分析】\n\n{type_analysis}\n\n{top_analysis}\n\n"
-                        "建议：延续高表现视频类型的选题方向，结合热门关键词进行创作。"
+                        "建议：延续高表现内容分类的选题方向，结合热门关键词进行创作。"
                     )
             except Exception as exc:
                 logger.error("本地 recommend 失败：%s", exc)
                 stats_text = (
                     "【本地推荐分析】\n基于已有数据的参考建议：\n"
-                    "1. 查看视频类型占比分布\n"
+                    "1. 查看视频类型/内容分类占比分布\n"
                     "2. 关注播放量 Top 内容的共同特征\n"
-                    "3. 延续高表现的视频类型进行选题"
+                    "3. 延续高表现的内容分类进行选题"
                 )
         else:
             stats_text = run_analysis(df, analysis_type, params={})

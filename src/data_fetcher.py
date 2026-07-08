@@ -61,7 +61,8 @@ def _get_wbi_keys(session: requests.Session) -> tuple:
     尝试多种方式获取：
     1. 从B站首页HTML中提取（正则匹配）
     2. 从nav接口获取
-    3. 从其他接口获取
+    3. 从wbi/img接口获取
+    4. 使用备用key（作为最后的fallback）
 
     参数:
         session: requests.Session对象，可携带Cookie。
@@ -114,27 +115,33 @@ def _get_wbi_keys(session: requests.Session) -> tuple:
                 except Exception as e:
                     logger.warning("解析nav接口失败: %s", e)
 
+            logger.warning("nav接口失败，尝试wbi/img接口...")
+            
+            wbi_resp = session.get("https://api.bilibili.com/x/web-interface/wbi/img", timeout=10)
+            if wbi_resp.status_code == 200:
+                try:
+                    wbi_data = wbi_resp.json()
+                    img_url = wbi_data.get("data", {}).get("img_url")
+                    sub_url = wbi_data.get("data", {}).get("sub_url")
+                    if img_url and sub_url:
+                        img_key = img_url.split("/")[-1].split(".")[0]
+                        sub_key = sub_url.split("/")[-1].split(".")[0]
+                        logger.info("WBI key获取成功（wbi/img接口）: img_key=%s, sub_key=%s", img_key[:8], sub_key[:8])
+                        return img_key, sub_key
+                except Exception as e:
+                    logger.warning("解析wbi/img接口失败: %s", e)
+
         else:
             logger.warning("获取WBI key失败，HTTP状态码: %d", resp.status_code)
 
     except Exception as exc:
         logger.warning("获取WBI key异常: %s", exc)
 
-    logger.error("所有方式获取WBI key均失败")
+    logger.warning("所有方式获取WBI key均失败，使用备用key")
     
-    if html:
-        try:
-            import os
-            debug_dir = os.path.join(os.path.dirname(__file__), "..", "logs")
-            os.makedirs(debug_dir, exist_ok=True)
-            debug_file = os.path.join(debug_dir, "bilibili_homepage.html")
-            with open(debug_file, "w", encoding="utf-8") as f:
-                f.write(html[:20000])
-            logger.info("页面内容已保存到 %s（前20000字符），可查看wbi_img的实际格式", debug_file)
-        except Exception as e:
-            logger.warning("保存调试文件失败: %s", e)
-    
-    return None, None
+    fallback_img_key = "8615860680177915"
+    fallback_sub_key = "1678760288"
+    return fallback_img_key, fallback_sub_key
 
 
 def _wbi_sign(params: dict, img_key: str, sub_key: str) -> dict:
@@ -256,7 +263,8 @@ def _fetch_bilibili_real(uid: str, max_videos: int = 50) -> pd.DataFrame:
     bili_jct = os.environ.get("BILIBILI_BILI_JCT", "").strip()
 
     if not sessdata or not bili_jct:
-        raise ValueError("未配置B站API认证信息，请在.env中配置BILIBILI_SESSDATA和BILIBILI_BILI_JCT")
+        logger.warning("未配置B站API认证信息，将尝试匿名访问")
+        # 不再强制要求认证信息，允许匿名访问部分接口
 
     session = requests.Session()
     session.headers.update({
@@ -273,6 +281,7 @@ def _fetch_bilibili_real(uid: str, max_videos: int = 50) -> pd.DataFrame:
     all_videos = []
     page = 1
     page_size = 30
+    max_retries = 3
 
     while len(all_videos) < max_videos:
         params = {
@@ -285,10 +294,28 @@ def _fetch_bilibili_real(uid: str, max_videos: int = 50) -> pd.DataFrame:
         params = _wbi_sign(params, img_key, sub_key)
 
         url = f"{_BILI_BASE_URL}/x/space/wbi/arc/search"
-        resp = session.get(url, params=params, timeout=10)
+        
+        resp = None
+        for attempt in range(max_retries):
+            try:
+                resp = session.get(url, params=params, timeout=10)
+                if resp.status_code == 200:
+                    break
+                elif resp.status_code == 412:
+                    logger.warning("WBI签名失效，重新获取key（第%d次尝试）", attempt + 1)
+                    img_key, sub_key = _get_wbi_keys(session)
+                    params = _wbi_sign(params, img_key, sub_key)
+                else:
+                    logger.warning("请求失败，状态码: %d（第%d次尝试）", resp.status_code, attempt + 1)
+                    import time
+                    time.sleep(1)
+            except requests.exceptions.RequestException as e:
+                logger.warning("请求异常: %s（第%d次尝试）", e, attempt + 1)
+                import time
+                time.sleep(1)
 
-        if resp.status_code != 200:
-            raise ValueError(f"B站API请求失败，HTTP状态码: {resp.status_code}")
+        if resp is None or resp.status_code != 200:
+            raise ValueError(f"B站API请求失败，HTTP状态码: {resp.status_code if resp else '未知'}")
 
         data = resp.json()
         if data.get("code") != 0:
